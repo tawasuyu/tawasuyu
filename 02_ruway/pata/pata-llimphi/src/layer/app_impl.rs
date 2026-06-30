@@ -1632,6 +1632,16 @@ impl LayerApp {
                 self.control_extras.magnify_pct = pct;
                 self.marcar_menu_dirty();
             }
+            Msg::Record(on) => {
+                // Grabar pantalla: el compositor toma sus cuadros y los encodea.
+                crate::spawn_cmd(if on {
+                    "mirada-ctl record start"
+                } else {
+                    "mirada-ctl record stop"
+                });
+                self.control_extras.recording = on;
+                self.marcar_menu_dirty();
+            }
             Msg::NetworkToggle => {
                 self.net_password = None;
                 self.set_menu_keyboard(false);

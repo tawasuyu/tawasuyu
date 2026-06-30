@@ -657,6 +657,16 @@ pub(crate) struct App {
     /// render escala toda la escena alrededor del puntero por este factor antes
     /// de presentar (ver `magnify_origin`). Accesibilidad para hipermétropes.
     pub(crate) magnify: f32,
+    /// **Grabación de pantalla** en curso (screencast), o `None`. El render
+    /// captura la salida primaria a la cadencia de `record_interval` y la entrega
+    /// a este `ScreenRecorder` (que la encodea por ffmpeg). Ver `record_due`,
+    /// `start_recording`, `stop_recording`.
+    pub(crate) recorder: Option<foreign_av::ScreenRecorder>,
+    /// Intervalo entre cuadros grabados (= `1/fps` de la grabación vigente).
+    pub(crate) record_interval: std::time::Duration,
+    /// Instante del último cuadro grabado, para acotar la captura a los fps
+    /// pedidos (el bucle de render corre a la tasa del monitor, más alta).
+    pub(crate) record_last: std::time::Instant,
     /// Parámetros de decoración de ventana (marco, …) que fija el Cerebro.
     pub(crate) decorations: mirada_brain::Decorations,
     /// Layout de la barra de título (botones, grupos, alineación, estilo) que

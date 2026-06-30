@@ -53,6 +53,10 @@ pub struct ControlExtras {
     /// (`100` = 1.0× apagada). Lo fija pata al clickear el segmento (best-effort:
     /// no hay readback del compositor, así que los atajos lo mueven sin avisar).
     pub magnify_pct: u16,
+    /// **Grabación de pantalla** en curso (screencast). Best-effort, como
+    /// `magnify_pct`: pata lo refleja al togglear; el atajo de teclado lo cambia
+    /// sin avisar.
+    pub recording: bool,
 }
 
 impl ControlExtras {
@@ -71,6 +75,7 @@ impl ControlExtras {
             // Sin readback del compositor; arranca «apagada» y se actualiza al
             // clickear un segmento de la lupa.
             magnify_pct: 100,
+            recording: false,
         }
     }
 }
@@ -297,6 +302,7 @@ pub(super) fn control_sections(
     hijos.push(switch_row("Luz nocturna", extras.night, theme, Msg::ControlNight));
     hijos.push(switch_row("Mantener despierto", extras.cafe, theme, Msg::ControlCafe));
     hijos.push(lupa_row(extras.magnify_pct, theme));
+    hijos.push(switch_row("Grabar pantalla", extras.recording, theme, Msg::Record));
     hijos
 }
 
@@ -376,6 +382,7 @@ pub fn extras_vivos(
         cafe: base.cafe,
         pachas: base.pachas.clone(),
         magnify_pct: base.magnify_pct,
+        recording: base.recording,
     }
 }
 
@@ -433,6 +440,8 @@ pub fn control_center_view(panel_h: f32, d: &CentroDatos, theme: &Theme) -> View
     hijos.push(switch_row("Mantener despierto", d.extras.cafe, theme, Msg::ControlCafe));
     // Lupa (zoom de pantalla completa, accesibilidad).
     hijos.push(lupa_row(d.extras.magnify_pct, theme));
+    // Grabar pantalla (screencast → ~/Videos, con audio del sistema).
+    hijos.push(switch_row("Grabar pantalla", d.extras.recording, theme, Msg::Record));
     // Contextos de usuario (pacha): chips de modo de uso. Sólo si hay alguno.
     if !d.extras.pachas.is_empty() {
         hijos.push(pacha_row(&d.extras.pachas, theme));

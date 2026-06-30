@@ -317,6 +317,11 @@ impl Desktop {
             ),
             DesktopAction::MagnifyReset => self.set_magnify(crate::action::MAGNIFY_MIN_PCT),
             DesktopAction::MagnifySet(pct) => self.set_magnify(pct),
+            // Grabación de pantalla: render puro del Cuerpo. El Cerebro sólo
+            // relaya — no toca layout ni guarda estado (el Cuerpo sabe si graba).
+            DesktopAction::RecordToggle => vec![BrainCommand::ToggleRecording],
+            DesktopAction::RecordStart(spec) => vec![BrainCommand::SetRecording(Some(spec))],
+            DesktopAction::RecordStop => vec![BrainCommand::SetRecording(None)],
             DesktopAction::FocusConstellationNext => self.focus_constellation(true),
             DesktopAction::FocusConstellationPrev => self.focus_constellation(false),
             DesktopAction::SwitchWorkspace(n) => {

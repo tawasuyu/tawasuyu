@@ -1393,6 +1393,19 @@ impl App {
                     self.magnify = (factor_pct as f32 / 100.0).max(1.0);
                     crate::screencopy::danar_todo(self);
                 }
+                // Grabación de pantalla (screencast): render puro del Cuerpo —
+                // arranca/para el `ScreenRecorder`, sin BodyOps sobre superficies.
+                BrainCommand::SetRecording(spec) => match spec {
+                    Some(s) => self.start_recording(s),
+                    None => self.stop_recording(),
+                },
+                BrainCommand::ToggleRecording => {
+                    if self.recorder.is_some() {
+                        self.stop_recording();
+                    } else {
+                        self.start_recording(mirada_brain::RecordSpec::default());
+                    }
+                }
                 other => {
                     for op in self.body.apply(other) {
                         self.exec_op(op);
@@ -1406,6 +1419,84 @@ impl App {
         // puede tipear sin clickear. Idempotente y nunca le roba el foco a una
         // ventana enfocada.
         self.reconcile_layer_keyboard();
+    }
+
+    /// Arranca una **grabación de pantalla** (screencast) de la salida primaria.
+    /// No-op si ya hay una en curso. La ruta vacía se resuelve a un default con
+    /// timestamp en `~/Videos`. Lanza el `ffmpeg` del `ScreenRecorder`; el render
+    /// le entregará cuadros a la cadencia de `record_interval` (ver `record_due`).
+    pub(crate) fn start_recording(&mut self, spec: mirada_brain::RecordSpec) {
+        if self.recorder.is_some() {
+            dlog!("mirada-compositor · ya hay una grabación en curso; ignoro el start.");
+            return;
+        }
+        let (w, h) = self.output_size;
+        if w <= 0 || h <= 0 {
+            dlog!("mirada-compositor · salida sin tamaño; no arranco la grabación.");
+            return;
+        }
+        let codec = match spec.codec {
+            mirada_brain::RecordCodec::H264 => foreign_av::RecordCodec::H264,
+            mirada_brain::RecordCodec::Av1 => foreign_av::RecordCodec::Av1,
+        };
+        let path = if spec.path.trim().is_empty() {
+            crate::default_record_path(codec.ext())
+        } else {
+            std::path::PathBuf::from(spec.path)
+        };
+        let fps = spec.fps.max(1) as u32;
+        let opts = foreign_av::RecordOptions {
+            path,
+            width: w,
+            height: h,
+            fps,
+            codec,
+            audio: spec.audio,
+            audio_source: None,
+        };
+        match foreign_av::ScreenRecorder::start(&opts) {
+            Ok(rec) => {
+                println!(
+                    "mirada-compositor · grabando pantalla ({w}×{h} @ {fps}fps) → {}",
+                    rec.path().display()
+                );
+                self.recorder = Some(rec);
+                self.record_interval = std::time::Duration::from_secs_f64(1.0 / fps as f64);
+                // Primer cuadro de inmediato: dejamos el reloj un intervalo atrás.
+                self.record_last = std::time::Instant::now()
+                    .checked_sub(self.record_interval)
+                    .unwrap_or_else(std::time::Instant::now);
+            }
+            Err(e) => dlog!("mirada-compositor · no pude arrancar la grabación: {e:?}"),
+        }
+    }
+
+    /// Detiene la grabación en curso y finaliza el archivo. No-op si no hay
+    /// ninguna. Bloquea brevemente mientras ffmpeg cierra el contenedor.
+    pub(crate) fn stop_recording(&mut self) {
+        if let Some(rec) = self.recorder.take() {
+            let path = rec.path().to_path_buf();
+            match rec.finish() {
+                Ok(()) => println!("mirada-compositor · grabación guardada → {}", path.display()),
+                Err(e) => dlog!("mirada-compositor · la grabación terminó con error: {e:?}"),
+            }
+        }
+    }
+
+    /// `true` si toca capturar un cuadro de grabación ahora (hay grabación activa
+    /// y pasó `record_interval` desde el último). Actualiza el reloj. El render lo
+    /// consulta cada frame; entre capturas no paga el readback de GPU.
+    pub(crate) fn record_due(&mut self) -> bool {
+        if self.recorder.is_none() {
+            return false;
+        }
+        let now = std::time::Instant::now();
+        if now.duration_since(self.record_last) >= self.record_interval {
+            self.record_last = now;
+            true
+        } else {
+            false
+        }
     }
 
     /// Ejecuta una operación concreta sobre las superficies reales.

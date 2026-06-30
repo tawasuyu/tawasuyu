@@ -1294,9 +1294,305 @@ pub fn encode_frames(
     Ok(())
 }
 
+// ─── Grabación de pantalla en vivo (screencast) ──────────────────────────────
+
+/// Códec/contenedor de salida de una grabación de pantalla.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordCodec {
+    /// H.264 (`libx264`) + AAC en MP4 — máxima compatibilidad y encode rápido. El
+    /// default de un grabador de pantalla.
+    H264,
+    /// AV1 (`libsvtav1`) + Opus en WebM — el formato **nativo** de la suite
+    /// (reproducible por `media-source-av1`), pero el encode por software es más
+    /// lento (puede no dar para tiempo real sin HW).
+    Av1,
+}
+
+impl RecordCodec {
+    /// La extensión de archivo natural del códec (`"mp4"` / `"webm"`).
+    pub fn ext(self) -> &'static str {
+        match self {
+            RecordCodec::H264 => "mp4",
+            RecordCodec::Av1 => "webm",
+        }
+    }
+}
+
+/// Parámetros de una grabación de pantalla.
+#[derive(Debug, Clone)]
+pub struct RecordOptions {
+    /// Ruta de salida (su extensión debería casar con `codec.ext()`).
+    pub path: PathBuf,
+    pub width: i32,
+    pub height: i32,
+    /// Cuadros por segundo del resultado.
+    pub fps: u32,
+    pub codec: RecordCodec,
+    /// `true` ⇒ muxea el audio del **sistema** (lo que suena por los parlantes:
+    /// el monitor del sink por defecto de PulseAudio/PipeWire).
+    pub audio: bool,
+    /// Source de PulseAudio a capturar. `None` ⇒ `@DEFAULT_MONITOR@` (el monitor
+    /// del sink por defecto). Para grabar el micrófono se pasaría su source.
+    pub audio_source: Option<String>,
+}
+
+/// Construye los argumentos de `ffmpeg` para grabar pantalla: lee cuadros crudos
+/// `BGRA` por `pipe:0` (stdin) a `fps` y, si `audio`, el monitor de PulseAudio en
+/// vivo; encodea a H.264/MP4 o AV1/WebM. **Puro** (no spawnea) para testearlo.
+///
+/// El video llega por el pipe sin timestamps, así que ffmpeg le asigna PTS según
+/// `-framerate`: el compositor debe alimentar ~`fps` cuadros/seg para que el
+/// video no se acorte ni desincronice del audio (que sí es de reloj real).
+pub fn record_args(opts: &RecordOptions) -> Vec<String> {
+    let fps = opts.fps.max(1);
+    let size = format!("{}x{}", opts.width.max(1), opts.height.max(1));
+    let mut a: Vec<String> = vec![
+        "-loglevel".into(),
+        "error".into(),
+        "-nostdin".into(),
+        "-y".into(),
+        // Entrada de video: cuadros crudos BGRA por stdin a la cadencia dada.
+        "-thread_queue_size".into(),
+        "512".into(),
+        "-f".into(),
+        "rawvideo".into(),
+        "-pixel_format".into(),
+        "bgra".into(),
+        "-video_size".into(),
+        size,
+        "-framerate".into(),
+        fps.to_string(),
+        "-i".into(),
+        "pipe:0".into(),
+    ];
+    if opts.audio {
+        let src = opts
+            .audio_source
+            .clone()
+            .unwrap_or_else(|| "@DEFAULT_MONITOR@".into());
+        a.extend([
+            "-thread_queue_size".into(),
+            "512".into(),
+            "-f".into(),
+            "pulse".into(),
+            "-i".into(),
+            src,
+        ]);
+    }
+    match opts.codec {
+        RecordCodec::H264 => {
+            a.extend([
+                "-c:v".into(),
+                "libx264".into(),
+                "-preset".into(),
+                "veryfast".into(),
+                "-pix_fmt".into(),
+                "yuv420p".into(),
+            ]);
+            if opts.audio {
+                a.extend(["-c:a".into(), "aac".into(), "-b:a".into(), "128k".into()]);
+            }
+            a.extend(["-movflags".into(), "+faststart".into()]);
+        }
+        RecordCodec::Av1 => {
+            a.extend([
+                "-c:v".into(),
+                "libsvtav1".into(),
+                "-preset".into(),
+                "8".into(),
+                "-crf".into(),
+                "32".into(),
+                "-pix_fmt".into(),
+                "yuv420p".into(),
+            ]);
+            if opts.audio {
+                a.extend(["-c:a".into(), "libopus".into(), "-b:a".into(), "128k".into()]);
+            }
+        }
+    }
+    // Cortar al stream más corto evita que video y audio diverjan al parar.
+    if opts.audio {
+        a.push("-shortest".into());
+    }
+    a.push(opts.path.to_string_lossy().into_owned());
+    a
+}
+
+/// Una grabación de pantalla **en curso**: un `ffmpeg` que lee cuadros BGRA por
+/// stdin. El compositor entrega cada cuadro con [`ScreenRecorder::submit`] a la
+/// cadencia de `fps`; al terminar, [`ScreenRecorder::finish`] cierra la entrada
+/// para que ffmpeg finalice el contenedor.
+///
+/// Las escrituras al pipe corren en un **hilo dedicado** con una cola corta: si
+/// el encoder se atrasa, `submit` **descarta** el cuadro en vez de bloquear el
+/// bucle de render del compositor (mejor saltar un cuadro que congelar el
+/// escritorio). El audio lo lee ffmpeg directo de PulseAudio — aquí sólo va video.
+pub struct ScreenRecorder {
+    tx: Option<std::sync::mpsc::SyncSender<Vec<u8>>>,
+    writer: Option<std::thread::JoinHandle<Result<(), FfmpegError>>>,
+    frame_bytes: usize,
+    path: PathBuf,
+}
+
+impl ScreenRecorder {
+    /// Lanza `ffmpeg` con [`record_args`] y arranca el hilo escritor del pipe.
+    /// `Err` si ffmpeg no se pudo spawnear (no está en PATH, etc.).
+    pub fn start(opts: &RecordOptions) -> Result<Self, FfmpegError> {
+        let frame_bytes = (opts.width.max(1) as usize) * (opts.height.max(1) as usize) * 4;
+        let mut child = Command::new("ffmpeg")
+            .args(record_args(opts))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| FfmpegError::Spawn(e.to_string()))?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| FfmpegError::Spawn("ffmpeg sin stdin".into()))?;
+        // Cola de holgura corta (4 cuadros). `try_send` descarta si está llena.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(4);
+        let writer = std::thread::spawn(move || -> Result<(), FfmpegError> {
+            use std::io::Write;
+            while let Ok(buf) = rx.recv() {
+                if let Err(e) = stdin.write_all(&buf) {
+                    // El pipe se rompió (ffmpeg murió): cosechamos y salimos.
+                    drop(stdin);
+                    let _ = child.wait();
+                    return Err(FfmpegError::Spawn(e.to_string()));
+                }
+            }
+            // Canal cerrado (finish/Drop): EOF a ffmpeg → finaliza el contenedor.
+            drop(stdin);
+            match child.wait() {
+                Ok(st) if st.success() => Ok(()),
+                Ok(st) => Err(FfmpegError::Probe(format!("ffmpeg salió con {st}"))),
+                Err(e) => Err(FfmpegError::Spawn(e.to_string())),
+            }
+        });
+        Ok(Self {
+            tx: Some(tx),
+            writer: Some(writer),
+            frame_bytes,
+            path: opts.path.clone(),
+        })
+    }
+
+    /// Bytes que mide un cuadro válido (`w·h·4`, BGRA).
+    pub fn frame_bytes(&self) -> usize {
+        self.frame_bytes
+    }
+
+    /// Encola un cuadro BGRA (consume el buffer). **No bloquea**: si el encoder
+    /// está atrasado (cola llena) descarta el cuadro y devuelve `false`. Un buffer
+    /// de tamaño distinto a [`frame_bytes`](Self::frame_bytes) se ignora.
+    pub fn submit(&mut self, frame: Vec<u8>) -> bool {
+        if frame.len() != self.frame_bytes {
+            return false;
+        }
+        match self.tx.as_ref() {
+            Some(tx) => tx.try_send(frame).is_ok(),
+            None => false,
+        }
+    }
+
+    /// La ruta de salida de la grabación.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Termina la grabación: cierra la cola (ffmpeg recibe EOF y finaliza el
+    /// archivo) y espera a que el encoder cierre. Bloquea hasta que ffmpeg
+    /// termina de escribir el contenedor.
+    pub fn finish(mut self) -> Result<(), FfmpegError> {
+        self.tx.take(); // cierra el canal → el hilo escritor sale del loop
+        match self.writer.take() {
+            Some(j) => j
+                .join()
+                .map_err(|_| FfmpegError::Spawn("hilo de grabación entró en pánico".into()))?,
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for ScreenRecorder {
+    /// Si se suelta sin [`finish`](Self::finish), igual cierra la cola para que
+    /// ffmpeg reciba EOF y finalice el archivo; el hilo escritor queda desligado
+    /// y lo cierra por su cuenta.
+    fn drop(&mut self) {
+        self.tx.take();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn record_args_h264_con_audio_arma_el_pipeline() {
+        let opts = RecordOptions {
+            path: PathBuf::from("/tmp/x.mp4"),
+            width: 1920,
+            height: 1080,
+            fps: 30,
+            codec: RecordCodec::H264,
+            audio: true,
+            audio_source: None,
+        };
+        let a = record_args(&opts);
+        let joined = a.join(" ");
+        // Entrada de video cruda BGRA por stdin, a 30 fps y tamaño correcto.
+        assert!(joined.contains("-f rawvideo"));
+        assert!(joined.contains("-pixel_format bgra"));
+        assert!(joined.contains("-video_size 1920x1080"));
+        assert!(joined.contains("-framerate 30"));
+        assert!(joined.contains("-i pipe:0"));
+        // Audio del sistema por el monitor por defecto.
+        assert!(joined.contains("-f pulse"));
+        assert!(joined.contains("@DEFAULT_MONITOR@"));
+        // Códec H.264 + AAC, faststart y la ruta al final.
+        assert!(joined.contains("-c:v libx264"));
+        assert!(joined.contains("-c:a aac"));
+        assert!(joined.contains("+faststart"));
+        assert_eq!(a.last().unwrap(), "/tmp/x.mp4");
+    }
+
+    #[test]
+    fn record_args_av1_sin_audio_no_mete_pulse_ni_audio() {
+        let opts = RecordOptions {
+            path: PathBuf::from("/tmp/y.webm"),
+            width: 1280,
+            height: 720,
+            fps: 25,
+            codec: RecordCodec::Av1,
+            audio: false,
+            audio_source: None,
+        };
+        let a = record_args(&opts);
+        let joined = a.join(" ");
+        assert!(joined.contains("-c:v libsvtav1"));
+        assert!(!joined.contains("-f pulse"));
+        assert!(!joined.contains("-c:a"));
+        assert!(!joined.contains("-shortest"));
+        assert_eq!(RecordCodec::Av1.ext(), "webm");
+        assert_eq!(RecordCodec::H264.ext(), "mp4");
+    }
+
+    #[test]
+    fn record_args_respeta_un_source_de_audio_explicito() {
+        let opts = RecordOptions {
+            path: PathBuf::from("/tmp/z.mp4"),
+            width: 800,
+            height: 600,
+            fps: 60,
+            codec: RecordCodec::H264,
+            audio: true,
+            audio_source: Some("alsa_output.pci-0000.analog-stereo.monitor".into()),
+        };
+        let a = record_args(&opts);
+        assert!(a.iter().any(|s| s == "alsa_output.pci-0000.analog-stereo.monitor"));
+        assert!(!a.iter().any(|s| s == "@DEFAULT_MONITOR@"));
+    }
 
     #[test]
     fn parse_frame_rate_basic() {

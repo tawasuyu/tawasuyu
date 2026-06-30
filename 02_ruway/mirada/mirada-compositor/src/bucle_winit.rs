@@ -313,6 +313,19 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
                 .chain(window_elems)
                 .chain(under_layers)
                 .collect();
+            // Grabación de pantalla (screencast): si toca un cuadro, re-componemos
+            // la escena SIN lupa a un offscreen y la entregamos al encoder. Se hace
+            // antes del render principal (el renderer está libre) y la entrega no
+            // bloquea (descarta si el encoder se atrasa).
+            if state.record_due() {
+                if let Some(px) =
+                    crate::screencopy::render_elements_offscreen(renderer, (size.w, size.h), &elements)
+                {
+                    if let Some(rec) = state.recorder.as_mut() {
+                        rec.submit(px);
+                    }
+                }
+            }
             let mut frame = match renderer.render(&mut framebuffer, size, Transform::Flipped180) {
                 Ok(f) => f,
                 Err(e) => {

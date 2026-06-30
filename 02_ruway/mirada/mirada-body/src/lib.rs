@@ -154,6 +154,10 @@ impl BodyState {
             // compositor en `apply_commands` (fija su factor y repinta) antes de
             // delegar acá; el `Body` no materializa superficies para ella.
             BrainCommand::SetMagnify { .. } => Vec::new(),
+            // La grabación de pantalla es render puro del compositor (toma sus
+            // cuadros y los encodea): la consume `apply_commands`; el `Body` no
+            // materializa superficies para ella.
+            BrainCommand::SetRecording(_) | BrainCommand::ToggleRecording => Vec::new(),
             BrainCommand::Place(placements) => {
                 let mut ops = Vec::new();
                 let listed: Vec<WindowId> = placements.iter().map(|p| p.id).collect();

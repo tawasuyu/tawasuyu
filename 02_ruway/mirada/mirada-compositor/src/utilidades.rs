@@ -293,6 +293,23 @@ pub(crate) fn magnify_origin(
     (Point::from((ox, oy)), z)
 }
 
+/// La ruta por defecto de una **grabación de pantalla**:
+/// `~/Videos/mirada-<epoch>.<ext>` (crea `~/Videos` si falta). El timestamp en
+/// segundos epoch hace el nombre único sin depender de `chrono`. `ext` = `"mp4"`
+/// / `"webm"` según el códec. Si no hay `HOME`, cae al directorio actual.
+pub(crate) fn default_record_path(ext: &str) -> std::path::PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let dir = home.join("Videos");
+    let _ = std::fs::create_dir_all(&dir);
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    dir.join(format!("mirada-{secs}.{ext}"))
+}
+
 /// Ancho (px) de cada botón del titlebar. Compartido entre el render y el
 /// hit-test del click.
 pub(crate) const TB_BTN_W: i32 = 28;

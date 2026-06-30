@@ -70,6 +70,7 @@ pub use mirada_layout::{
     WallpaperFit, WindowId, Workspace, ZoneFrac,
 };
 pub use mirada_protocol::{
-    BodyEvent, BrainCommand, Decorations, OutputId, TitleAlign, TitlebarAction,
-    TitlebarButtonStyle, TitlebarEdge, TitlebarItem, TitlebarLayout, WindowEffects, WindowPlacement,
+    BodyEvent, BrainCommand, Decorations, OutputId, RecordCodec, RecordSpec, TitleAlign,
+    TitlebarAction, TitlebarButtonStyle, TitlebarEdge, TitlebarItem, TitlebarLayout, WindowEffects,
+    WindowPlacement,
 };

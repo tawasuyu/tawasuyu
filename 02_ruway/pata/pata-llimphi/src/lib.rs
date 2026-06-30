@@ -217,6 +217,9 @@ pub enum Msg {
     /// (`100` = 1.0× apagada, `200` = 2.0×) vía `mirada-ctl magnify <pct>`.
     /// Accesibilidad para hipermétropes.
     Magnify(u16),
+    /// **Grabar pantalla** (screencast): `true` arranca, `false` detiene, vía
+    /// `mirada-ctl record start/stop`.
+    Record(bool),
     /// Desplegar/replegar el applet de red (lista de redes Wi-Fi).
     NetworkToggle,
     /// Conectar a la red Wi-Fi `ssid` (`nmcli device wifi connect`).
@@ -1895,6 +1898,11 @@ impl App for PataApp {
                 // Lupa de pantalla: el compositor la aplica (sigue el puntero).
                 spawn_cmd(&format!("mirada-ctl magnify {pct}"));
                 model.control_extras.magnify_pct = pct;
+            }
+            Msg::Record(on) => {
+                // Grabar pantalla: el compositor toma sus cuadros y los encodea.
+                spawn_cmd(if on { "mirada-ctl record start" } else { "mirada-ctl record stop" });
+                model.control_extras.recording = on;
             }
             Msg::NetworkToggle => {
                 model.network_open = !model.network_open;

@@ -407,6 +407,51 @@ impl Default for WindowEffects {
     }
 }
 
+/// Códec/contenedor de una **grabación de pantalla** (screencast). Espeja
+/// `foreign_av::RecordCodec` sin que el protocolo dependa del puente ffmpeg.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RecordCodec {
+    /// H.264 + AAC en MP4 — compatible y rápido (el default).
+    H264,
+    /// AV1 + Opus en WebM — el formato nativo de la suite.
+    Av1,
+}
+
+impl Default for RecordCodec {
+    fn default() -> Self {
+        RecordCodec::H264
+    }
+}
+
+/// Lo que define una **grabación de pantalla**: a dónde, con qué códec, si lleva
+/// audio del sistema y a cuántos fps. Viaja del Cerebro al Cuerpo dentro de
+/// [`BrainCommand::SetRecording`]; el Cuerpo (que tiene los píxeles) la
+/// materializa con `foreign_av::ScreenRecorder`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordSpec {
+    /// Ruta de salida. **Vacía** ⇒ el Cuerpo elige un default con timestamp en
+    /// `~/Videos` (no puede armarlo el Cerebro, que no toca el filesystem).
+    pub path: String,
+    pub codec: RecordCodec,
+    /// `true` ⇒ muxea el audio del sistema (monitor del sink por defecto).
+    pub audio: bool,
+    /// Cuadros por segundo del resultado.
+    pub fps: u16,
+}
+
+impl Default for RecordSpec {
+    /// Default razonable: H.264/MP4 con audio del sistema a 30 fps, ruta a elegir
+    /// por el Cuerpo.
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            codec: RecordCodec::H264,
+            audio: true,
+            fps: 30,
+        }
+    }
+}
+
 /// Una orden del Cerebro al Cuerpo.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BrainCommand {
@@ -471,6 +516,15 @@ pub enum BrainCommand {
     /// para hipermétropes. El foco lo conoce sólo el Cuerpo (es su puntero), por
     /// eso el comando lleva únicamente el factor.
     SetMagnify { factor_pct: u16 },
+    /// **Grabación de pantalla** (screencast): `Some(spec)` arranca la grabación
+    /// con esos parámetros (si `spec.path` está vacío el Cuerpo elige la ruta);
+    /// `None` la detiene. Es render puro del Cuerpo (tiene los píxeles): toma los
+    /// cuadros compuestos y los encodea por `foreign_av::ScreenRecorder`.
+    SetRecording(Option<RecordSpec>),
+    /// **Grabación de pantalla**: alterna grabar/parar. El Cuerpo decide según su
+    /// estado actual y, al arrancar, arma un [`RecordSpec`] por defecto (ruta con
+    /// timestamp). Es lo que dispara el atajo de teclado, que no carga parámetros.
+    ToggleRecording,
 }
 
 /// Un hecho del Cuerpo que el Cerebro debe conocer.
@@ -778,6 +832,31 @@ mod tests {
         write_frame(&mut buf, &cmd).unwrap();
         let back: BrainCommand = read_frame(&mut Cursor::new(buf)).unwrap().unwrap();
         assert_eq!(back, cmd);
+    }
+
+    #[test]
+    fn frame_round_trips_set_recording() {
+        for cmd in [
+            BrainCommand::SetRecording(Some(RecordSpec {
+                path: "/home/u/Videos/x.mp4".into(),
+                codec: RecordCodec::H264,
+                audio: true,
+                fps: 30,
+            })),
+            BrainCommand::SetRecording(Some(RecordSpec {
+                path: String::new(),
+                codec: RecordCodec::Av1,
+                audio: false,
+                fps: 60,
+            })),
+            BrainCommand::SetRecording(None),
+            BrainCommand::ToggleRecording,
+        ] {
+            let mut buf = Vec::new();
+            write_frame(&mut buf, &cmd).unwrap();
+            let back: BrainCommand = read_frame(&mut Cursor::new(buf)).unwrap().unwrap();
+            assert_eq!(back, cmd);
+        }
     }
 
     #[test]

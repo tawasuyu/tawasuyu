@@ -1478,6 +1478,22 @@ fn a_session_home_is_consumed_after_the_first_window() {
     assert_eq!(d.workspace_loads()[2], 0);
 }
 
+#[test]
+fn las_acciones_de_grabacion_relayan_al_cuerpo() {
+    use mirada_protocol::RecordSpec;
+    let mut d = desktop_with_screen();
+    // Toggle → ToggleRecording (el Cuerpo decide).
+    assert_eq!(d.apply(DesktopAction::RecordToggle), vec![BrainCommand::ToggleRecording]);
+    // Stop → SetRecording(None).
+    assert_eq!(d.apply(DesktopAction::RecordStop), vec![BrainCommand::SetRecording(None)]);
+    // Start(spec) → SetRecording(Some(spec)) con el spec intacto.
+    let spec = RecordSpec { path: "/tmp/a.mp4".into(), ..RecordSpec::default() };
+    assert_eq!(
+        d.apply(DesktopAction::RecordStart(spec.clone())),
+        vec![BrainCommand::SetRecording(Some(spec))]
+    );
+}
+
 /// Extrae el `factor_pct` de un `SetMagnify` en la lista de comandos, si lo hay.
 fn magnify_of(cmds: &[BrainCommand]) -> Option<u16> {
     cmds.iter().find_map(|c| match c {

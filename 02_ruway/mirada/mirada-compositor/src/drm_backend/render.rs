@@ -3172,6 +3172,21 @@ impl DrmState {
             }
         }
 
+        // Grabación de pantalla (screencast): sólo la salida primaria por ahora.
+        // Si toca un cuadro, re-componemos la escena SIN lupa a un offscreen y la
+        // entregamos al encoder (la entrega no bloquea: descarta si se atrasa).
+        if is_primary && self.app.record_due() {
+            if let Some(px) = crate::screencopy::render_elements_offscreen(
+                &mut self.renderer,
+                (rect.w, rect.h),
+                &elements,
+            ) {
+                if let Some(rec) = self.app.recorder.as_mut() {
+                    rec.submit(px);
+                }
+            }
+        }
+
         // Lupa (zoom de pantalla completa): con factor >1 envolvemos cada `Frame`
         // compuesto en un `RescaleRenderElement` anclado al origen que centra el
         // puntero (en coords locales a esta salida), así toda la escena —cursor

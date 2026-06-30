@@ -86,6 +86,9 @@ fn run(args: &[String]) -> Result<(), String> {
         // acciones `magnify-*`. `magnify 200`/`magnify 2x` fijan el factor;
         // `in`/`out` lo mueven un paso; sin args o `reset`/`off` la apaga.
         Some("magnify" | "lupa" | "zoom-screen") => run_magnify(&args[1..]),
+        // Grabación de pantalla (screencast): `record start [--av1] [--no-audio]
+        // [--fps N] [ruta]`, `record stop`, `record toggle`.
+        Some("record" | "rec" | "grabar") => run_record(&args[1..]),
         // App remota vía waypipe: `mirada-ctl remote [user@]host <app> [args…]`
         // envuelve la app en `waypipe ssh …` y la lanza como un Spawn normal —
         // para el compositor es un cliente Wayland más (sin protocolo nuevo). No
@@ -345,6 +348,53 @@ fn run_magnify(args: &[String]) -> Result<(), String> {
     }
 }
 
+/// **Grabación de pantalla** (screencast): traduce `mirada-ctl record …` a la
+/// `DesktopAction` y la dispara. `start` arma un [`mirada_brain::RecordSpec`] con
+/// las banderas (`--av1`, `--no-audio`, `--fps N`, ruta opcional); `stop` la
+/// detiene; sin subcomando (o `toggle`) alterna. Si la ruta va vacía el Cuerpo
+/// elige un default con timestamp en `~/Videos`.
+fn run_record(args: &[String]) -> Result<(), String> {
+    let action = match args.first().map(|s| s.as_str()) {
+        Some("stop") => DesktopAction::RecordStop,
+        None | Some("toggle") => DesktopAction::RecordToggle,
+        Some("start") => {
+            let mut codec = mirada_brain::RecordCodec::H264;
+            let mut audio = true;
+            let mut fps: u16 = 30;
+            let mut path = String::new();
+            let mut it = args[1..].iter();
+            while let Some(a) = it.next() {
+                match a.as_str() {
+                    "--av1" | "--webm" => codec = mirada_brain::RecordCodec::Av1,
+                    "--h264" | "--mp4" => codec = mirada_brain::RecordCodec::H264,
+                    "--no-audio" | "--mute" => audio = false,
+                    "--fps" => {
+                        fps = it
+                            .next()
+                            .and_then(|s| s.parse().ok())
+                            .ok_or("--fps requiere un número (ej: --fps 60)")?;
+                    }
+                    other if other.starts_with("--") => {
+                        return Err(format!("opción de record desconocida: «{other}»"));
+                    }
+                    other => path = other.to_string(),
+                }
+            }
+            DesktopAction::RecordStart(mirada_brain::RecordSpec { path, codec, audio, fps })
+        }
+        Some(other) => {
+            return Err(format!(
+                "subcomando de record desconocido: «{other}»\n  use: start · stop · toggle"
+            ))
+        }
+    };
+    match request(CtlRequest::Do(action))? {
+        CtlReply::Ok => Ok(()),
+        CtlReply::Error(e) => Err(e),
+        _ => Err("respuesta inesperada del Cerebro".into()),
+    }
+}
+
 /// Lanza una app remota envolviéndola en waypipe sobre ssh. `args` es
 /// `[user@]host <app> [args…]`. Construye el comando con [`waypipe_remote_cmd`]
 /// y lo manda como `DesktopAction::Spawn` — el Cuerpo lo corre con `sh -c` y la
@@ -382,6 +432,7 @@ fn print_help() {
            mirada-ctl workspaces    estado de los escritorios (active/count/loads)\n  \
            mirada-ctl cycle-zones   cicla el preset de zonas de arrastre\n  \
            mirada-ctl magnify …     lupa de pantalla (zoom accesible; ver abajo)\n  \
+           mirada-ctl record …      grabar pantalla a video (screencast; ver abajo)\n  \
            mirada-ctl profile …     biblioteca de perfiles de atajos (ver abajo)\n  \
            mirada-ctl vista …       vistas de escritorio completo (ver abajo)\n  \
            mirada-ctl remote …      lanza una app remota vía waypipe (ver abajo)\n  \
@@ -407,6 +458,13 @@ fn print_help() {
            mirada-ctl magnify in/out  acerca / aleja un paso\n  \
            mirada-ctl magnify reset   la apaga (1.0×)\n  \
            atajos por defecto: Super++ acerca · Super+- aleja · Super+0 apaga\n\
+         \n\
+         GRABAR PANTALLA (screencast → ~/Videos, con audio del sistema):\n  \
+           mirada-ctl record start            graba (H.264/MP4, audio, 30fps)\n  \
+           mirada-ctl record start --av1      AV1/WebM (formato nativo)\n  \
+           mirada-ctl record start --no-audio --fps 60 ~/clip.mp4\n  \
+           mirada-ctl record stop             detiene y guarda el archivo\n  \
+           mirada-ctl record toggle           alterna grabar/parar (Super+Shift+R)\n\
          \n\
          REMOTE (app de otra máquina, túnel waypipe+ssh):\n  \
            mirada-ctl remote [user@]host <app> [args…]\n  \
@@ -470,6 +528,9 @@ Acciones de mirada-ctl:
   magnify-in / magnify-out   acerca / aleja la lupa un paso
   magnify-reset              apaga la lupa (1.0×)
   magnify:<pct>              fija el factor (200 = 2.0×); ver: mirada-ctl magnify
+ Grabar pantalla (screencast):
+  record-toggle              alterna grabar/parar (Super+Shift+R)
+  record-stop                detiene la grabación; ver: mirada-ctl record
  Escritorios:
   workspace <n>              activa el escritorio n (1..9)
   workspace-next / -prev     escritorio siguiente / anterior

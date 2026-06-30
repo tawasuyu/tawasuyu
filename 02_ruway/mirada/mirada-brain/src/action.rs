@@ -187,6 +187,16 @@ pub enum DesktopAction {
     /// exacto (acotado a `[MAGNIFY_MIN_PCT, MAGNIFY_MAX_PCT]`). Para `mirada-ctl
     /// magnify 200` y el control de pata.
     MagnifySet(u16),
+    /// **Grabación de pantalla**: alterna grabar/parar. El Cuerpo decide según su
+    /// estado y arma un default (ruta con timestamp) al arrancar. Es lo que va al
+    /// atajo de teclado, que no carga parámetros.
+    RecordToggle,
+    /// **Grabación de pantalla**: arranca con parámetros explícitos (ruta, códec,
+    /// audio, fps). La construye `mirada-ctl record start …` y viaja tipada por el
+    /// socket de control (su forma textual de keymap usa los defaults).
+    RecordStart(mirada_protocol::RecordSpec),
+    /// **Grabación de pantalla**: detiene la grabación en curso (no-op si no hay).
+    RecordStop,
     /// Salta el foco a la **siguiente constelación** (familia de ventanas por
     /// linaje de proceso) del escritorio activo — el "alt-tab" por actividad, no
     /// por ventana suelta.
@@ -303,6 +313,12 @@ impl fmt::Display for DesktopAction {
             DesktopAction::MagnifyOut => f.write_str("magnify-out"),
             DesktopAction::MagnifyReset => f.write_str("magnify-reset"),
             DesktopAction::MagnifySet(pct) => write!(f, "magnify:{pct}"),
+            // RecordStart lleva un spec que no cabe en la forma textual del
+            // keymap; ahí se escribe «record-start» y al parsear usa los defaults
+            // (el spec rico viaja tipado por el socket, no por texto).
+            DesktopAction::RecordToggle => f.write_str("record-toggle"),
+            DesktopAction::RecordStart(_) => f.write_str("record-start"),
+            DesktopAction::RecordStop => f.write_str("record-stop"),
             DesktopAction::FocusConstellationNext => f.write_str("focus-constellation-next"),
             DesktopAction::FocusConstellationPrev => f.write_str("focus-constellation-prev"),
             DesktopAction::WorkspaceNext => f.write_str("workspace-next"),
@@ -357,6 +373,9 @@ impl FromStr for DesktopAction {
             "magnify-in" => Self::MagnifyIn,
             "magnify-out" => Self::MagnifyOut,
             "magnify-reset" => Self::MagnifyReset,
+            "record-toggle" => Self::RecordToggle,
+            "record-start" => Self::RecordStart(mirada_protocol::RecordSpec::default()),
+            "record-stop" => Self::RecordStop,
             "focus-constellation-next" => Self::FocusConstellationNext,
             "focus-constellation-prev" => Self::FocusConstellationPrev,
             "workspace-next" => Self::WorkspaceNext,
@@ -518,6 +537,8 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+equal".into(), DesktopAction::MagnifyIn),
         ("Super+minus".into(), DesktopAction::MagnifyOut),
         ("Super+0".into(), DesktopAction::MagnifyReset),
+        // Grabar pantalla (screencast): Super+Shift+R alterna grabar/parar.
+        ("Super+Shift+r".into(), DesktopAction::RecordToggle),
         ("Super+Shift+Return".into(), DesktopAction::Spawn("foot".into())),
         ("Super+p".into(), DesktopAction::Spawn("foot -e mirada-launcher".into())),
         // Panel de control unificado (wawa-panel): ajustes de mirada/pata/sistema
