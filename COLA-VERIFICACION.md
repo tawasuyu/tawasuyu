@@ -47,7 +47,14 @@ sólo cuando es un visual nuevo no certificable de otra forma.
   ojo:** mirarlo corriendo (`cargo run -p llimphi-widget-rive-button --example
   rive_button_demo --release`). NOTA: el "(Tiers 1→5)" de la versión previa era
   una confusión — esos Tiers son de PARIDAD-FLUTTER.md, no de la máquina.
-- [ ] anim-studio F1/F2/F3 — exportar/consumir desde otra app
+- [x] **anim-studio exportar/consumir — lazo autor→consumo CERRADO 2026-06-29:**
+  el `Doc` (grafo de estados, F1) ya serializaba+round-trippeaba a RON; el gap era
+  que ninguna app ejecutaba una máquina authored (el greeter sólo usa el rig). Ahora
+  `rive-button::from_state_machine(sm, clips)` consume una `StateMachine` ya
+  compilada (`Project::load(..).doc.compile()`). Certificado headless: test
+  `boton_authorado_round_trip_corre_el_ciclo` en el studio (grafo con forma de
+  botón → RON → compile → corre idle→hover→press→idle). (F1=grafo, F2=rig son
+  superficies, no hotkeys de export; no hay "F3".)
 - [ ] llimphi-lottie — con archivos Lottie reales
 - [ ] voxel-studio — autoría + render de showreel (editor independiente, no enchufado a producto)
 
