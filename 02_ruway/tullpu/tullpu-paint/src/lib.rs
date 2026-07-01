@@ -460,6 +460,31 @@ pub fn poligono_a_mascara(pts: &[(i32, i32)], w: u32, h: u32) -> Vec<u8> {
     m
 }
 
+/// Traslada una máscara de un canal `w × h` por el offset con signo `(dx, dy)`
+/// sobre un lienzo del mismo tamaño: `dst(x, y) = src(x − dx, y − dy)`. Lo que
+/// entra desde afuera queda en 0 y lo que sale del lienzo se descarta. Es la
+/// contraparte de un desplazamiento de píxeles para que la selección siga al
+/// contenido conservando su forma irregular. Pura.
+pub fn trasladar_mascara(src: &[u8], w: u32, h: u32, dx: i32, dy: i32) -> Vec<u8> {
+    let wi = w as i32;
+    let hi = h as i32;
+    let mut out = vec![0u8; (w as usize) * (h as usize)];
+    for y in 0..hi {
+        let sy = y - dy;
+        if sy < 0 || sy >= hi {
+            continue;
+        }
+        for x in 0..wi {
+            let sx = x - dx;
+            if sx < 0 || sx >= wi {
+                continue;
+            }
+            out[(y * wi + x) as usize] = src[(sy * wi + sx) as usize];
+        }
+    }
+    out
+}
+
 /// Factor de cobertura del pincel en `[0,1]` para un píxel a distancia
 /// `d` del centro, con radio `r` y `dureza` en `[0,1]`. Dentro del núcleo
 /// `dureza·r` es 1.0; entre ahí y `r` cae linealmente a 0; fuera de `r`
@@ -1139,6 +1164,24 @@ mod tests {
         // (1,1) está dentro (x+y < 7); (6,6) fuera.
         assert_eq!(m[1 * 8 + 1], 255, "interior seleccionado");
         assert_eq!(m[6 * 8 + 6], 0, "exterior libre");
+    }
+
+    #[test]
+    fn trasladar_mascara_corre_y_recorta() {
+        // 4×4 con un 2×2 marcado en la esquina (0,0). Trasladar +2,+1.
+        let mut m = vec![0u8; 16];
+        for y in 0..2 {
+            for x in 0..2 {
+                m[y * 4 + x] = 255;
+            }
+        }
+        let out = trasladar_mascara(&m, 4, 4, 2, 1);
+        // Ahora el 2×2 vive en (2,1)..(4,3).
+        assert_eq!(out[1 * 4 + 2], 255, "(2,1) marcado");
+        assert_eq!(out[2 * 4 + 3], 255, "(3,2) marcado");
+        assert_eq!(out[0], 0, "origen (0,0) vaciado");
+        // Trasladar del todo fuera → máscara vacía.
+        assert!(trasladar_mascara(&m, 4, 4, 9, 9).iter().all(|&v| v == 0));
     }
 
     #[test]

@@ -690,6 +690,59 @@
     }
 
     #[test]
+    fn mover_con_mascara_irregular_conserva_la_forma() {
+        // Lienzo 4×4. Máscara diagonal: sólo (0,0) y (1,1). Los píxeles NO
+        // seleccionados dentro del bbox (1,0)/(0,1) deben quedarse quietos —
+        // eso prueba que se levanta por máscara, no por rect.
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        let mut buf = vec![0u8; 4 * 4 * 4];
+        let sel = [200u8, 100, 50, 255]; // color de los píxeles seleccionados
+        let libre = [10u8, 20, 30, 255]; // color de los NO seleccionados del bbox
+        let set = |b: &mut [u8], x: usize, y: usize, c: [u8; 4]| {
+            let i = (y * 4 + x) * 4;
+            b[i..i + 4].copy_from_slice(&c);
+        };
+        set(&mut buf, 0, 0, sel);
+        set(&mut buf, 1, 1, sel);
+        set(&mut buf, 1, 0, libre);
+        set(&mut buf, 0, 1, libre);
+        let hash = model.almacen.insertar(buf);
+        model.lienzo.capa_mut(id).unwrap().contenido = hash;
+        // Máscara diagonal (0,0)+(1,1); bbox = (0,0)..(2,2).
+        let mut mask = vec![0u8; 16];
+        mask[0] = 255;
+        mask[1 * 4 + 1] = 255;
+        let mh = model.almacen.insertar(mask);
+        model.seleccion_mascara = Some(mh);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+
+        assert!(mover_pixeles_seleccion(&mut model, 2, 2));
+        let nh = model.lienzo.capa(id).unwrap().contenido;
+        let bp = model.almacen.obtener(nh).unwrap();
+        let pix = |x: usize, y: usize| {
+            let i = (y * 4 + x) * 4;
+            [bp[i], bp[i + 1], bp[i + 2], bp[i + 3]]
+        };
+        // Los seleccionados aterrizaron en la diagonal desplazada.
+        assert_eq!(pix(2, 2), sel, "(0,0)→(2,2)");
+        assert_eq!(pix(3, 3), sel, "(1,1)→(3,3)");
+        // El origen de los seleccionados quedó vacío.
+        assert_eq!(pix(0, 0), [0, 0, 0, 0], "(0,0) levantado");
+        assert_eq!(pix(1, 1), [0, 0, 0, 0], "(1,1) levantado");
+        // Los NO seleccionados del bbox NO se movieron (clave: no se levantó el rect).
+        assert_eq!(pix(1, 0), libre, "(1,0) intacto — fuera de la máscara");
+        assert_eq!(pix(0, 1), libre, "(0,1) intacto — fuera de la máscara");
+        // La máscara siguió al contenido conservando su forma diagonal.
+        assert!(model.seleccion_mascara.is_some(), "sigue siendo selección por máscara");
+        let cov = cobertura_seleccion(&model).unwrap();
+        assert_eq!(cov[2 * 4 + 2], 255, "(2,2) seleccionado");
+        assert_eq!(cov[3 * 4 + 3], 255, "(3,3) seleccionado");
+        assert_eq!(cov[2 * 4 + 3], 0, "(3,2) NO — la forma no degradó a rect");
+        assert_eq!(cov[3 * 4 + 2], 0, "(2,3) NO — la forma no degradó a rect");
+    }
+
+    #[test]
     fn overlay_se_arma_con_la_varita_y_se_limpia_al_seleccionar_todo() {
         let mut model = modelo_minimo();
         let id = model.seleccionada.unwrap();

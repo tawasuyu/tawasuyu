@@ -111,6 +111,7 @@ pub(crate) use tullpu_paint::{
     rotar_buffer_90_ccw_bpp,
     rotar_buffer_90_cw,
     rotar_buffer_90_cw_bpp,
+    trasladar_mascara,
     trazar_linea_mascara,
     trazar_linea_pincel,
     transformar_afin,
@@ -1448,20 +1449,26 @@ pub(crate) fn mover_pixeles_seleccion(
         return false;
     };
     let src = src.to_vec();
-    // Levantar el contenido del rect, borrarlo de su lugar, recomponerlo
-    // en el destino.
-    let (sub, _) = recortar_subbuffer(&src, w, x0, y0, x1, y1);
-    let limpio = limpiar_rect_en_buffer(&src, w, x0, y0, x1, y1);
-    let nuevo = blit_alpha_sobre(
-        &limpio,
-        w,
-        h,
-        &sub,
-        x1 - x0,
-        y1 - y0,
-        x0 as i32 + dx,
-        y0 as i32 + dy,
-    );
+    // Cobertura vigente: máscara irregular exacta (varita/lazo) o el rect
+    // sintetizado. Levantamos SÓLO los píxeles cubiertos — no el rect entero —
+    // así una selección irregular mueve su forma, no su bounding box.
+    let tenia_mascara = model.seleccion_mascara.is_some();
+    let Some(cov) = cobertura_seleccion(model) else {
+        return false;
+    };
+    // `levantado` = src donde la cobertura marca, transparente afuera; `limpio`
+    // = el complemento (src con el área seleccionada vaciada). Blittear
+    // `levantado` desplazado (dx,dy) sobre `limpio` compone src-over los píxeles
+    // movidos sobre lo que quede debajo.
+    let mut levantado = vec![0u8; src.len()];
+    let mut limpio = src.clone();
+    for i in 0..cov.len().min(src.len() / 4) {
+        if cov[i] > 127 {
+            levantado[i * 4..i * 4 + 4].copy_from_slice(&src[i * 4..i * 4 + 4]);
+            limpio[i * 4..i * 4 + 4].copy_from_slice(&[0, 0, 0, 0]);
+        }
+    }
+    let nuevo = blit_alpha_sobre(&limpio, w, h, &levantado, w, h, dx, dy);
     let new_hash = model.almacen.insertar(nuevo);
     if new_hash == hash_actual {
         model.estado = "movimiento sin efecto".into();
@@ -1472,21 +1479,29 @@ pub(crate) fn mover_pixeles_seleccion(
     }
     model.lienzo.propagar_stale(id);
     aplicar_y_recomponer(model);
-    // La selección sigue al contenido: trasladar el rect y clampear al
-    // lienzo (half-open). Si quedó fuera por completo, se limpia.
-    let nx0 = (x0 as i32 + dx).clamp(0, w as i32) as u32;
-    let ny0 = (y0 as i32 + dy).clamp(0, h as i32) as u32;
-    let nx1 = (x1 as i32 + dx).clamp(0, w as i32) as u32;
-    let ny1 = (y1 as i32 + dy).clamp(0, h as i32) as u32;
-    model.seleccion = if nx1 > nx0 && ny1 > ny0 {
-        Some(RectImagen { x0: nx0, y0: ny0, x1: nx1, y1: ny1 })
-    } else {
-        None
-    };
-    // Mover píxeles degrada a selección rectangular (la máscara de la varita
-    // no acompaña el desplazamiento por ahora).
-    model.seleccion_mascara = None;
-    model.seleccion_overlay = None;
+    // La selección sigue al contenido: trasladar la cobertura por (dx,dy). La
+    // máscara irregular conserva su forma; un rect puro sigue siendo rect.
+    let cov_movida = trasladar_mascara(&cov, w, h, dx, dy);
+    match bbox_de_mascara(&cov_movida, w, h) {
+        Some(bbox) => {
+            model.seleccion = Some(bbox);
+            if tenia_mascara {
+                let hash = model.almacen.insertar(cov_movida);
+                model.seleccion_mascara = Some(hash);
+                sincronizar_overlay_seleccion(model);
+            } else {
+                // Selección rectangular: se mantiene como rect puro (sin máscara).
+                model.seleccion_mascara = None;
+                model.seleccion_overlay = None;
+            }
+        }
+        None => {
+            // El contenido salió por completo del lienzo.
+            model.seleccion = None;
+            model.seleccion_mascara = None;
+            model.seleccion_overlay = None;
+        }
+    }
     model.estado = format!("movida selección ({:+}, {:+})", dx, dy);
     true
 }
