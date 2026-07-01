@@ -41,7 +41,7 @@ use smithay::backend::renderer::element::surface::{
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::backend::renderer::element::{render_elements, Id, Kind};
 use smithay::backend::renderer::gles::element::TextureShaderElement;
-use smithay::backend::renderer::gles::{GlesRenderer, GlesTexProgram};
+use smithay::backend::renderer::gles::{Capability, GlesRenderer, GlesTexProgram};
 use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::renderer::{ImportAll, ImportDma, ImportMem};
 use smithay::backend::session::libseat::LibSeatSession;
@@ -789,6 +789,24 @@ fn paste_rgba_into_bgra(
 
 /// Rasteriza un título a un `MemoryRenderBuffer` (Argb8888); si no rasteriza
 /// nada, devuelve un búfer 1×1 transparente. Lo cachea el llamador.
+/// Crea el `GlesRenderer` con todas las capabilities soportadas MENOS `Debug`.
+/// La capability `Debug` hace que smithay instale `glDebugMessageCallback`, que
+/// vuelca al log CADA error GL no-fatal —p. ej. el `GL_INVALID_VALUE` de un
+/// `glTexSubImage2D` cuando un buffer chico cambió de tamaño (Iris Xe)— en bucle.
+/// El error es inofensivo (GL descarta la llamada; no cambia el render); sin el
+/// callback sólo desaparece el spam. Para depurar GPU, volvé a `GlesRenderer::new`.
+///
+/// # Safety
+/// Igual que [`GlesRenderer::new`]: el `EGLContext` no debe estar activo en otro hilo.
+pub(crate) unsafe fn gles_renderer_sin_debug(
+    context: EGLContext,
+) -> Result<GlesRenderer, smithay::backend::renderer::gles::GlesError> {
+    let caps = GlesRenderer::supported_capabilities(&context)?
+        .into_iter()
+        .filter(|c| *c != Capability::Debug);
+    unsafe { GlesRenderer::with_capabilities(context, caps) }
+}
+
 fn title_buffer(tr: &crate::text::TextRenderer, title: &str, color: [u8; 4]) -> MemoryRenderBuffer {
     match tr.rasterize(title, TITLE_PX, color) {
         Some(r) => MemoryRenderBuffer::from_slice(
@@ -1134,7 +1152,7 @@ fn preparar_render_node(gpu: &std::path::Path) -> Option<RenderNodePrep> {
     let egl_context = EGLContext::new(&egl_display)
         .map_err(|e| dlog!("mirada-compositor · EGLContext(render) falló ({e}); camino clásico"))
         .ok()?;
-    let mut renderer = unsafe { GlesRenderer::new(egl_context) }
+    let mut renderer = unsafe { gles_renderer_sin_debug(egl_context) }
         .map_err(|e| dlog!("mirada-compositor · GlesRenderer(render) falló ({e}); camino clásico"))
         .ok()?;
     let rounded_shader = compilar_rounded_shader(&mut renderer);
@@ -1332,7 +1350,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
                 .map_err(|e| format!("EGLDisplay::new falló: {e}"))?;
             let egl_context =
                 EGLContext::new(&egl_display).map_err(|e| format!("EGLContext::new falló: {e}"))?;
-            let mut renderer = unsafe { GlesRenderer::new(egl_context) }
+            let mut renderer = unsafe { gles_renderer_sin_debug(egl_context) }
                 .map_err(|e| format!("GlesRenderer falló: {e}"))?;
             println!("      renderer GLES listo (card node).");
             timing_hito("mirada:gles-listo");
