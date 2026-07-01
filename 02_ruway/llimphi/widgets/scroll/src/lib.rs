@@ -371,8 +371,8 @@ where
         position: Position::Absolute,
         inset: Rect {
             top: length(-offset),
-            left: length(0.0),
-            right: length(0.0),
+            left: length(0.0_f32),
+            right: length(0.0_f32),
             bottom: auto(),
         },
         ..Default::default()
@@ -391,7 +391,7 @@ where
             position: Position::Absolute,
             inset: Rect {
                 top: length(thumb_y),
-                right: length(0.0),
+                right: length(0.0_f32),
                 left: auto(),
                 bottom: auto(),
             },
@@ -414,9 +414,9 @@ where
         let track = View::new(Style {
             position: Position::Absolute,
             inset: Rect {
-                top: length(0.0),
-                right: length(0.0),
-                bottom: length(0.0),
+                top: length(0.0_f32),
+                right: length(0.0_f32),
+                bottom: length(0.0_f32),
                 left: auto(),
             },
             size: Size {
@@ -447,7 +447,7 @@ where
     View::new(Style {
         position: Position::Relative,
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: length(viewport_len),
         },
         ..Default::default()
@@ -513,7 +513,7 @@ where
         let f = on_scroll.clone();
         let thumb = View::new(Style {
             position: Position::Absolute,
-            inset: Rect { top: length(thumb_y), right: length(0.0), left: auto(), bottom: auto() },
+            inset: Rect { top: length(thumb_y), right: length(0.0_f32), left: auto(), bottom: auto() },
             size: Size { width: length(palette.bar_width), height: length(thumb_h) },
             ..Default::default()
         })
@@ -526,7 +526,7 @@ where
         });
         let track = View::new(Style {
             position: Position::Absolute,
-            inset: Rect { top: length(0.0), right: length(0.0), bottom: length(0.0), left: auto() },
+            inset: Rect { top: length(0.0_f32), right: length(0.0_f32), bottom: length(0.0_f32), left: auto() },
             size: Size { width: length(palette.bar_width), height: auto() },
             ..Default::default()
         })
@@ -541,7 +541,7 @@ where
         let f = on_scroll.clone();
         let thumb = View::new(Style {
             position: Position::Absolute,
-            inset: Rect { left: length(thumb_x), bottom: length(0.0), top: auto(), right: auto() },
+            inset: Rect { left: length(thumb_x), bottom: length(0.0_f32), top: auto(), right: auto() },
             size: Size { width: length(thumb_w), height: length(palette.bar_width) },
             ..Default::default()
         })
@@ -554,7 +554,7 @@ where
         });
         let track = View::new(Style {
             position: Position::Absolute,
-            inset: Rect { left: length(0.0), right: length(0.0), bottom: length(0.0), top: auto() },
+            inset: Rect { left: length(0.0_f32), right: length(0.0_f32), bottom: length(0.0_f32), top: auto() },
             size: Size { width: auto(), height: length(palette.bar_width) },
             ..Default::default()
         })
@@ -710,7 +710,7 @@ where
     // Header pinned (altura `h`), recortado, con rueda propia.
     let s_head = on_scroll.clone();
     let header_box = View::new(Style {
-        size: Size { width: percent(1.0), height: length(h) },
+        size: Size { width: percent(1.0_f32), height: length(h) },
         ..Default::default()
     })
     .clip(true)
@@ -731,7 +731,7 @@ where
     View::new(Style {
         flex_direction:
             llimphi_ui::llimphi_layout::taffy::prelude::FlexDirection::Column,
-        size: Size { width: percent(1.0), height: length(viewport_len) },
+        size: Size { width: percent(1.0_f32), height: length(viewport_len) },
         ..Default::default()
     })
     .clip(true)

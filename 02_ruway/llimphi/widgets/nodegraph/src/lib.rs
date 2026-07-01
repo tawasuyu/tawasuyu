@@ -590,9 +590,9 @@ where
         position: Position::Absolute,
         inset: Rect {
             left: length(diam + 4.0),
-            top: length(0.0),
+            top: length(0.0_f32),
             right: length(diam + 4.0),
-            bottom: length(0.0),
+            bottom: length(0.0_f32),
         },
         size: Size {
             width: Dimension::auto(),
@@ -610,9 +610,9 @@ where
     View::new(Style {
         position: Position::Absolute,
         inset: Rect {
-            left: length(0.0),
+            left: length(0.0_f32),
             top: length(y_top),
-            right: length(0.0),
+            right: length(0.0_f32),
             bottom: length(0.0_f32),
         },
         size: Size {

@@ -146,7 +146,7 @@ where
     let total = pages.len();
     if total == 0 {
         return View::<Msg>::new(Style {
-            size: Size { width: percent(1.0), height: percent(1.0) },
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
             ..Default::default()
         });
     }
@@ -161,7 +161,7 @@ where
     // Wrapper de la página: 100% × resto (todo menos la barra de dots).
     let page_layer = View::<Msg>::new(Style {
         position: Position::Relative,
-        size: Size { width: percent(1.0), height: percent(1.0) },
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
     .children(vec![page]);
@@ -174,14 +174,14 @@ where
         let prev = View::<Msg>::new(Style {
             position: Position::Absolute,
             inset: Rect {
-                left: length(0.0),
-                top: length(0.0),
-                bottom: length(0.0),
+                left: length(0.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
                 right: llimphi_ui::llimphi_layout::taffy::prelude::auto(),
             },
             size: Size {
                 width: length(ARROW_W),
-                height: percent(1.0),
+                height: percent(1.0_f32),
             },
             align_items: Some(AlignItems::Center),
             justify_content: Some(JustifyContent::Center),
@@ -197,14 +197,14 @@ where
         let next = View::<Msg>::new(Style {
             position: Position::Absolute,
             inset: Rect {
-                right: length(0.0),
-                top: length(0.0),
-                bottom: length(0.0),
+                right: length(0.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
                 left: llimphi_ui::llimphi_layout::taffy::prelude::auto(),
             },
             size: Size {
                 width: length(ARROW_W),
-                height: percent(1.0),
+                height: percent(1.0_f32),
             },
             align_items: Some(AlignItems::Center),
             justify_content: Some(JustifyContent::Center),
@@ -220,7 +220,7 @@ where
     }
     let page_area = View::<Msg>::new(Style {
         position: Position::Relative,
-        size: Size { width: percent(1.0), height: percent(1.0) },
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         flex_grow: 1.0,
         ..Default::default()
     })
@@ -251,16 +251,16 @@ where
         justify_content: Some(JustifyContent::Center),
         gap: llimphi_ui::llimphi_layout::taffy::Size {
             width: length(DOT_GAP),
-            height: length(0.0),
+            height: length(0.0_f32),
         },
-        size: Size { width: percent(1.0), height: length(DOT_ROW_H) },
+        size: Size { width: percent(1.0_f32), height: length(DOT_ROW_H) },
         ..Default::default()
     })
     .children(dots);
 
     View::<Msg>::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: percent(1.0), height: percent(1.0) },
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
     .children(vec![page_area, dot_row])
