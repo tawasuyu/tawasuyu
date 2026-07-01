@@ -163,6 +163,17 @@ impl CtlServer {
         }
         let listener = UnixListener::bind(path)?;
         listener.set_nonblocking(true)?;
+        // Aflojar permisos del socket para que los clientes de la SESIÓN puedan
+        // conectar. En arje el compositor corre como root y el socket cae en /run
+        // como root-only; sin esto, pata (que corre como el usuario y spawnea
+        // `mirada-ctl workspace/focus/vista/…`) recibe EACCES al conectar —un
+        // socket Unix exige permiso de ESCRITURA para `connect`— y el control de
+        // workspaces/foco desde la barra no hace nada. Es el socket de control del
+        // PROPIO compositor del usuario: no lleva secretos ni autoriza por uid, así
+        // que 0666 es lo correcto en un escritorio personal (en multiusuario se
+        // endurecería con chown al dueño de la sesión). Best-effort.
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666));
         Ok(Self { listener, path: path.to_path_buf() })
     }
 
