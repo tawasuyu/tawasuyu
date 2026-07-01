@@ -33,7 +33,7 @@ pub(crate) fn wawa_body(model: &Model) -> View<Msg> {
         flex_direction: FlexDirection::Column,
         flex_grow: 1.0,
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: auto(),
         },
         ..Default::default()
@@ -49,12 +49,12 @@ fn wawa_card(t: &llimphi_theme::Theme, a: &WawaApp) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Column,
         gap: Size {
-            width: length(6.0),
-            height: length(6.0),
+            width: length(6.0_f32),
+            height: length(6.0_f32),
         },
         padding: pad(13.0, 12.0),
         size: Size {
-            width: length(190.0),
+            width: length(190.0_f32),
             height: auto(),
         },
         ..Default::default()
@@ -66,16 +66,16 @@ fn wawa_card(t: &llimphi_theme::Theme, a: &WawaApp) -> View<Msg> {
             flex_direction: FlexDirection::Row,
             align_items: Some(AlignItems::Center),
             gap: Size {
-                width: length(8.0),
-                height: length(4.0),
+                width: length(8.0_f32),
+                height: length(4.0_f32),
             },
             ..Default::default()
         })
         .children(vec![
             View::new(Style {
                 size: Size {
-                    width: length(10.0),
-                    height: length(10.0),
+                    width: length(10.0_f32),
+                    height: length(10.0_f32),
                 },
                 ..Default::default()
             })

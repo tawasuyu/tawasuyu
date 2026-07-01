@@ -170,8 +170,8 @@ pub(crate) fn header(model: &Model) -> View<Msg> {
         justify_content: Some(JustifyContent::SpaceBetween),
         padding: pad(16.0, 12.0),
         gap: S {
-            width: length(8.0),
-            height: length(8.0),
+            width: length(8.0_f32),
+            height: length(8.0_f32),
         },
         ..Default::default()
     })
@@ -182,8 +182,8 @@ pub(crate) fn header(model: &Model) -> View<Msg> {
             flex_direction: FD::Row,
             align_items: Some(AlignItems::Center),
             gap: S {
-                width: length(8.0),
-                height: length(8.0),
+                width: length(8.0_f32),
+                height: length(8.0_f32),
             },
             ..Default::default()
         })
@@ -198,14 +198,14 @@ pub(crate) fn tabs(model: &Model) -> View<Msg> {
     View::new(St {
         flex_direction: FlexDirection::Row,
         gap: S {
-            width: length(6.0),
-            height: length(6.0),
+            width: length(6.0_f32),
+            height: length(6.0_f32),
         },
         padding: llimphi_ui::llimphi_layout::taffy::geometry::Rect {
-            left: length(16.0),
-            right: length(16.0),
-            top: length(0.0),
-            bottom: length(8.0),
+            left: length(16.0_f32),
+            right: length(16.0_f32),
+            top: length(0.0_f32),
+            bottom: length(8.0_f32),
         },
         ..Default::default()
     })
@@ -487,8 +487,8 @@ impl App for Monitor {
         let root = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
-                width: percent(1.0),
-                height: percent(1.0),
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
             },
             ..Default::default()
         })

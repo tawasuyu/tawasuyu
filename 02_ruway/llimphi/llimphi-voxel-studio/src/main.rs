@@ -1001,7 +1001,7 @@ impl App for Studio {
         // las franjas van al ras (FUERA) o flotando con margen (DENTRO).
         View::new(Style {
             flex_direction: FlexDirection::Row,
-            size: Size { width: percent(1.0), height: percent(1.0) },
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
             ..Default::default()
         })
         .fill(model.theme.bg_app)
@@ -1088,7 +1088,7 @@ fn left_sidebar(model: &Model) -> View<Msg> {
     rows.push(spacer(10.0));
     rows.push(
         View::new(Style {
-            size: Size { width: percent(1.0), height: Dimension::auto() },
+            size: Size { width: percent(1.0_f32), height: Dimension::auto() },
             ..Default::default()
         })
         .text(model.status.clone(), 12.0, theme.fg_placeholder)
@@ -1098,7 +1098,7 @@ fn left_sidebar(model: &Model) -> View<Msg> {
     let content = View::new(Style {
         flex_direction: FlexDirection::Column,
         flex_grow: 1.0,
-        size: Size { width: percent(0.0), height: percent(1.0) },
+        size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
         padding: pad(12.0, 12.0),
         gap: gap_y(6.0),
         ..Default::default()
@@ -1134,7 +1134,7 @@ fn right_sidebar(model: &Model) -> View<Msg> {
     let panel = View::new(Style {
         flex_direction: FlexDirection::Column,
         flex_grow: 1.0,
-        size: Size { width: percent(0.0), height: percent(1.0) },
+        size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
         padding: pad(14.0, 14.0),
         gap: gap_y(8.0),
         ..Default::default()
@@ -1150,13 +1150,13 @@ fn right_sidebar(model: &Model) -> View<Msg> {
 /// "flote"; al ras (FUERA) va pegada al borde.
 fn sidebar_frame(theme: &Theme, width: f32, floating: bool, children: Vec<View<Msg>>) -> View<Msg> {
     use llimphi_ui::llimphi_layout::taffy::prelude::Rect;
-    let m = if floating { 6.0 } else { 0.0 };
+    let m: f32 = if floating { 6.0 } else { 0.0 };
     let mut v = View::new(Style {
         flex_direction: FlexDirection::Row,
-        size: Size { width: length(width), height: percent(1.0) },
+        size: Size { width: length(width), height: percent(1.0_f32) },
         margin: Rect { left: length(m), right: length(m), top: length(m), bottom: length(m) },
         padding: pad(0.0, 6.0),
-        gap: Size { width: length(4.0), height: length(0.0) },
+        gap: Size { width: length(4.0_f32), height: length(0.0_f32) },
         ..Default::default()
     })
     .fill(theme.bg_panel)
@@ -1171,8 +1171,8 @@ fn sidebar_frame(theme: &Theme, width: f32, floating: bool, children: Vec<View<M
 fn crud_row(btn: &ButtonPalette) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0), height: Dimension::auto() },
-        gap: Size { width: length(4.0), height: length(0.0) },
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(4.0_f32), height: length(0.0_f32) },
         ..Default::default()
     })
     .children(vec![
@@ -1186,7 +1186,7 @@ fn crud_row(btn: &ButtonPalette) -> View<Msg> {
 fn cell(child: View<Msg>) -> View<Msg> {
     View::new(Style {
         flex_grow: 1.0,
-        size: Size { width: percent(0.0), height: Dimension::auto() },
+        size: Size { width: percent(0.0_f32), height: Dimension::auto() },
         ..Default::default()
     })
     .children(vec![child])
@@ -1208,7 +1208,7 @@ fn center(model: &Model) -> View<Msg> {
     };
     View::new(Style {
         flex_grow: 1.0,
-        size: Size { width: Dimension::auto(), height: percent(1.0) },
+        size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
         ..Default::default()
     })
     .fill(Color::from_rgba8(12, 14, 18, 255))
@@ -1219,14 +1219,14 @@ fn center(model: &Model) -> View<Msg> {
 fn placeholder_2d(text: &str, theme: &Theme) -> View<Msg> {
     View::new(Style {
         position: Position::Absolute,
-        size: Size { width: percent(1.0), height: percent(1.0) },
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(llimphi_ui::llimphi_layout::taffy::prelude::JustifyContent::Center),
         padding: pad(40.0, 40.0),
         ..Default::default()
     })
     .children(vec![View::new(Style {
-        size: Size { width: percent(0.7), height: Dimension::auto() },
+        size: Size { width: percent(0.7_f32), height: Dimension::auto() },
         ..Default::default()
     })
     .text(text.to_string(), 16.0, theme.fg_muted)
@@ -1239,14 +1239,14 @@ fn material_swatch(model: &Model) -> View<Msg> {
     let col = Color::from_rgba8(c[0], c[1], c[2], 255);
     View::new(Style {
         position: Position::Absolute,
-        size: Size { width: percent(1.0), height: percent(1.0) },
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(llimphi_ui::llimphi_layout::taffy::prelude::JustifyContent::Center),
         padding: pad(60.0, 60.0),
         ..Default::default()
     })
     .children(vec![View::new(Style {
-        size: Size { width: percent(0.6), height: percent(0.6) },
+        size: Size { width: percent(0.6_f32), height: percent(0.6_f32) },
         ..Default::default()
     })
     .fill(col)
@@ -1286,7 +1286,7 @@ fn canvas_3d(model: &Model) -> View<Msg> {
         .collect();
     let absolute = Style {
         position: Position::Absolute,
-        size: Size { width: percent(1.0), height: percent(1.0) },
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     };
 
@@ -1854,8 +1854,8 @@ fn reparto_tools(model: &Model, s: &SceneSpec) -> Vec<View<Msg>> {
 fn crud_pair(a: &str, ma: Msg, b: &str, mb: Msg, btn: &ButtonPalette) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0), height: Dimension::auto() },
-        gap: Size { width: length(4.0), height: length(0.0) },
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(4.0_f32), height: length(0.0_f32) },
         ..Default::default()
     })
     .children(vec![cell(button_view(a, btn, ma)), cell(button_view(b, btn, mb))])
@@ -2153,7 +2153,7 @@ fn next_option(cur: Option<u64>, ids: &[u64]) -> Option<u64> {
 
 fn selectable_row(label: String, selected: bool, msg: Msg, theme: &Theme) -> View<Msg> {
     View::new(Style {
-        size: Size { width: percent(1.0), height: length(30.0) },
+        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
         align_items: Some(AlignItems::Center),
         padding: pad(10.0, 0.0),
         ..Default::default()
@@ -2166,7 +2166,7 @@ fn selectable_row(label: String, selected: bool, msg: Msg, theme: &Theme) -> Vie
 
 fn section_title(text: &str, theme: &Theme) -> View<Msg> {
     View::new(Style {
-        size: Size { width: percent(1.0), height: length(20.0) },
+        size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
         ..Default::default()
     })
     .text(text.to_string(), 12.0, theme.accent)
@@ -2175,7 +2175,7 @@ fn section_title(text: &str, theme: &Theme) -> View<Msg> {
 
 fn body_text(s: String, color: Color, _theme: &Theme) -> View<Msg> {
     View::new(Style {
-        size: Size { width: percent(1.0), height: Dimension::auto() },
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
         ..Default::default()
     })
     .text(s, 13.0, color)
@@ -2184,7 +2184,7 @@ fn body_text(s: String, color: Color, _theme: &Theme) -> View<Msg> {
 
 fn spacer(h: f32) -> View<Msg> {
     View::new(Style {
-        size: Size { width: percent(1.0), height: length(h) },
+        size: Size { width: percent(1.0_f32), height: length(h) },
         ..Default::default()
     })
 }
@@ -2198,7 +2198,7 @@ fn pad(
 }
 
 fn gap_y(h: f32) -> Size<llimphi_ui::llimphi_layout::taffy::prelude::LengthPercentage> {
-    Size { width: length(0.0), height: length(h) }
+    Size { width: length(0.0_f32), height: length(h) }
 }
 
 // =============================================================================

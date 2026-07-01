@@ -59,7 +59,7 @@ pub(crate) fn map_body(model: &Model) -> View<Msg> {
     let canvas = View::new(Style {
         flex_grow: 1.0,
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: auto(),
         },
         ..Default::default()
@@ -129,7 +129,7 @@ pub(crate) fn map_body(model: &Model) -> View<Msg> {
         flex_direction: FlexDirection::Column,
         flex_grow: 1.0,
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: auto(),
         },
         ..Default::default()
@@ -197,8 +197,8 @@ fn map_toolbar(model: &Model) -> View<Msg> {
         flex_direction: FlexDirection::Row,
         align_items: Some(AlignItems::Center),
         gap: Size {
-            width: length(8.0),
-            height: length(6.0),
+            width: length(8.0_f32),
+            height: length(6.0_f32),
         },
         padding: pad(16.0, 8.0),
         ..Default::default()

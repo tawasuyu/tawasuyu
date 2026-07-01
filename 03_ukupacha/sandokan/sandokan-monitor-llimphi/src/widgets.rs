@@ -151,7 +151,7 @@ pub(crate) fn chip_warn(t: &Theme, label: &str, value: &str) -> View<Msg> {
         align_items: Some(AlignItems::End),
         padding: pad(10.0, 5.0),
         size: Size {
-            width: length(220.0),
+            width: length(220.0_f32),
             height: auto(),
         },
         ..Default::default()
@@ -172,7 +172,7 @@ pub(crate) fn note(t: &Theme, txt: &str) -> View<Msg> {
     View::new(Style {
         padding: pad(16.0, 10.0),
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: auto(),
         },
         ..Default::default()
@@ -188,13 +188,13 @@ pub(crate) fn empty_state(t: &Theme, title: &str, body: &str) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         gap: Size {
-            width: length(10.0),
-            height: length(10.0),
+            width: length(10.0_f32),
+            height: length(10.0_f32),
         },
         padding: pad(40.0, 40.0),
         flex_grow: 1.0,
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: auto(),
         },
         ..Default::default()
@@ -204,7 +204,7 @@ pub(crate) fn empty_state(t: &Theme, title: &str, body: &str) -> View<Msg> {
         View::new(Style::default()).text(title, 16.0, t.fg_text),
         View::new(Style {
             size: Size {
-                width: length(420.0),
+                width: length(420.0_f32),
                 height: auto(),
             },
             ..Default::default()
@@ -249,7 +249,7 @@ pub(crate) fn spacer(w: f32) -> View<Msg> {
     View::new(Style {
         size: Size {
             width: length(w),
-            height: percent(1.0),
+            height: percent(1.0_f32),
         },
         flex_shrink: 0.0,
         ..Default::default()
@@ -279,13 +279,13 @@ pub(crate) fn scroll_grid(t: &Theme, cards: Vec<View<Msg>>) -> View<Msg> {
         flex_wrap: FlexWrap::Wrap,
         align_items: Some(AlignItems::Start),
         gap: Size {
-            width: length(12.0),
-            height: length(12.0),
+            width: length(12.0_f32),
+            height: length(12.0_f32),
         },
         padding: pad(16.0, 16.0),
         flex_grow: 1.0,
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: auto(),
         },
         ..Default::default()
@@ -305,8 +305,8 @@ pub(crate) fn sparkline(t: &Theme, hist: Option<&VecDeque<f32>>, _cpu: f64) -> V
     let track = t.bg_input;
     View::new(Style {
         size: Size {
-            width: percent(1.0),
-            height: length(34.0),
+            width: percent(1.0_f32),
+            height: length(34.0_f32),
         },
         ..Default::default()
     })
@@ -372,8 +372,8 @@ pub(crate) fn meter(
 
     let graph = View::new(Style {
         size: Size {
-            width: percent(1.0),
-            height: length(32.0),
+            width: percent(1.0_f32),
+            height: length(32.0_f32),
         },
         ..Default::default()
     })
@@ -436,8 +436,8 @@ pub(crate) fn meter(
             height: auto(),
         },
         gap: Size {
-            width: length(0.0),
-            height: length(5.0),
+            width: length(0.0_f32),
+            height: length(5.0_f32),
         },
         ..Default::default()
     })

@@ -344,7 +344,7 @@ pub(crate) fn pad(v: f32) -> Rect<llimphi_ui::llimphi_layout::taffy::LengthPerce
 
 /// Rect de padding sólo horizontal (top/bottom 0).
 pub(crate) fn pad_h(v: f32) -> Rect<llimphi_ui::llimphi_layout::taffy::LengthPercentage> {
-    Rect { left: length(v), right: length(v), top: length(0.0), bottom: length(0.0) }
+    Rect { left: length(v), right: length(v), top: length(0.0_f32), bottom: length(0.0_f32) }
 }
 
 /// Una fila de alto fijo, ancho total, contenido centrado verticalmente.
@@ -374,7 +374,7 @@ pub(crate) fn modal_scrim(card: View<Msg>, dismiss: Msg) -> View<Msg> {
 /// centrada con el título, el texto en edición y los atajos.
 pub(crate) fn prompt_overlay(p: &Prompt, theme: &Theme) -> View<Msg> {
     let input = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(34.0) },
+        size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
         padding: pad(8.0),
         align_items: Some(AlignItems::Center),
         ..Default::default()
@@ -423,7 +423,7 @@ pub(crate) fn confirm_overlay(targets: &[(nahual_source_core::NodeId, String)], 
         size: Size { width: length(120.0_f32), height: length(34.0_f32) },
         justify_content: Some(JustifyContent::Center),
         align_items: Some(AlignItems::Center),
-        margin: Rect { left: length(0.0), right: length(10.0), top: length(0.0), bottom: length(0.0) },
+        margin: Rect { left: length(0.0_f32), right: length(10.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
         ..Default::default()
     })
     .fill(theme.fg_destructive)

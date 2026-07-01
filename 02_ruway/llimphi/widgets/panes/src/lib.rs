@@ -364,7 +364,7 @@ where
     View::new(Style {
         flex_grow: grow.max(0.01),
         flex_shrink: 1.0,
-        flex_basis: length(0.0),
+        flex_basis: length(0.0_f32),
         size: full(),
         min_size: zero(),
         ..Default::default()

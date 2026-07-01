@@ -83,7 +83,7 @@ pub(crate) fn system_body(model: &Model) -> View<Msg> {
         flex_direction: FlexDirection::Column,
         flex_grow: 1.0,
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: auto(),
         },
         ..Default::default()
@@ -97,14 +97,14 @@ pub(crate) fn system_body(model: &Model) -> View<Msg> {
             flex_direction: FlexDirection::Column,
             flex_grow: 1.0,
             size: Size {
-                width: percent(1.0),
+                width: percent(1.0_f32),
                 height: auto(),
             },
             padding: Rect {
-                left: length(12.0),
-                right: length(12.0),
-                top: length(0.0),
-                bottom: length(8.0),
+                left: length(12.0_f32),
+                right: length(12.0_f32),
+                top: length(0.0_f32),
+                bottom: length(8.0_f32),
             },
             ..Default::default()
         })
@@ -146,8 +146,8 @@ pub(crate) fn sys_graphs(model: &Model) -> View<Msg> {
         flex_direction: FlexDirection::Row,
         flex_wrap: FlexWrap::Wrap,
         gap: Size {
-            width: length(10.0),
-            height: length(8.0),
+            width: length(10.0_f32),
+            height: length(8.0_f32),
         },
         padding: pad(16.0, 10.0),
         ..Default::default()
@@ -197,8 +197,8 @@ pub(crate) fn sys_action_bar(model: &Model, sel: Option<&SysProc>) -> View<Msg> 
         flex_direction: FlexDirection::Row,
         align_items: Some(AlignItems::Center),
         gap: Size {
-            width: length(8.0),
-            height: length(6.0),
+            width: length(8.0_f32),
+            height: length(6.0_f32),
         },
         padding: pad(16.0, 8.0),
         ..Default::default()
@@ -232,8 +232,8 @@ pub(crate) fn sys_filter_bar(model: &Model, matches: usize) -> View<Msg> {
     let mut row: Vec<View<Msg>> = vec![
         View::new(Style {
             size: Size {
-                width: length(24.0),
-                height: percent(1.0),
+                width: length(24.0_f32),
+                height: percent(1.0_f32),
             },
             flex_shrink: 0.0,
             justify_content: Some(JustifyContent::Center),
@@ -268,8 +268,8 @@ pub(crate) fn sys_filter_bar(model: &Model, matches: usize) -> View<Msg> {
         flex_direction: FlexDirection::Row,
         align_items: Some(AlignItems::Center),
         gap: Size {
-            width: length(8.0),
-            height: length(6.0),
+            width: length(8.0_f32),
+            height: length(6.0_f32),
         },
         padding: pad(16.0, 6.0),
         ..Default::default()
@@ -290,7 +290,7 @@ pub(crate) fn sys_header_row(model: &Model) -> View<Msg> {
         let mut v = View::new(Style {
             size: Size {
                 width: length(w),
-                height: percent(1.0),
+                height: percent(1.0_f32),
             },
             flex_shrink: 0.0,
             justify_content: Some(JustifyContent::Center),
@@ -319,18 +319,18 @@ pub(crate) fn sys_header_row(model: &Model) -> View<Msg> {
         flex_direction: FlexDirection::Row,
         align_items: Some(AlignItems::Center),
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: length(ROW_H + 4.0),
         },
         gap: Size {
-            width: length(6.0),
-            height: length(0.0),
+            width: length(6.0_f32),
+            height: length(0.0_f32),
         },
         padding: Rect {
-            left: length(8.0),
-            right: length(8.0),
-            top: length(0.0),
-            bottom: length(0.0),
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
         },
         ..Default::default()
     })
@@ -357,7 +357,7 @@ pub(crate) fn sys_row(t: &Theme, p: &SysProc, selected: bool, node: Option<(u16,
         View::new(Style {
             size: Size {
                 width: length(w),
-                height: percent(1.0),
+                height: percent(1.0_f32),
             },
             flex_shrink: 0.0,
             justify_content: Some(JustifyContent::Center),
@@ -390,9 +390,9 @@ pub(crate) fn sys_row(t: &Theme, p: &SysProc, selected: bool, node: Option<(u16,
         parts.push(command_node(&p.cmd, cmd_col));
         View::new(Style {
             flex_grow: 1.0,
-            flex_basis: length(0.0),
+            flex_basis: length(0.0_f32),
             min_size: Size {
-                width: length(0.0),
+                width: length(0.0_f32),
                 height: auto(),
             },
             flex_direction: FlexDirection::Row,
@@ -407,18 +407,18 @@ pub(crate) fn sys_row(t: &Theme, p: &SysProc, selected: bool, node: Option<(u16,
         flex_direction: FlexDirection::Row,
         align_items: Some(AlignItems::Center),
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: length(ROW_H),
         },
         gap: Size {
-            width: length(6.0),
-            height: length(0.0),
+            width: length(6.0_f32),
+            height: length(0.0_f32),
         },
         padding: Rect {
-            left: length(8.0),
-            right: length(8.0),
-            top: length(0.0),
-            bottom: length(0.0),
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
         },
         ..Default::default()
     })
@@ -448,7 +448,7 @@ pub(crate) fn tri_node(t: &Theme, has_kids: bool, collapsed: bool, pid: i32) -> 
     let col = t.fg_muted;
     let mut v = View::new(Style {
         size: Size {
-            width: length(15.0),
+            width: length(15.0_f32),
             height: length(ROW_H),
         },
         flex_shrink: 0.0,
@@ -491,9 +491,9 @@ pub(crate) fn command_node(cmd: &str, color: Color) -> View<Msg> {
     let cmd = cmd.chars().take(512).collect::<String>();
     View::new(Style {
         flex_grow: 1.0,
-        flex_basis: length(0.0),
+        flex_basis: length(0.0_f32),
         min_size: Size {
-            width: length(0.0),
+            width: length(0.0_f32),
             height: auto(),
         },
         size: Size {

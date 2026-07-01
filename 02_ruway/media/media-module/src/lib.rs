@@ -213,7 +213,7 @@ pub fn view<H: Clone + Send + Sync + 'static>(
     };
     let media_wrap = View::new(Style {
         flex_grow: 1.0,
-        min_size: Size { width: length(0.0), height: length(0.0) },
+        min_size: Size { width: length(0.0_f32), height: length(0.0_f32) },
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })

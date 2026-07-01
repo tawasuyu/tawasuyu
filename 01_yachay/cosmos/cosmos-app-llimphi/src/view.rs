@@ -714,7 +714,7 @@ fn aspect_color_intensity(kind: &str, intensity: f32) -> Color {
 fn intensity_bar(kind: &str, intensity: f32) -> View<Msg> {
     View::new(Style {
         size: Size {
-            width: length(4.0),
+            width: length(4.0_f32),
             height: length(ROW_H - 6.0),
         },
         flex_shrink: 0.0,

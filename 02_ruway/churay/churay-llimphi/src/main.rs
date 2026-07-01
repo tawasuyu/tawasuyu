@@ -593,7 +593,7 @@ impl App for Churay {
                     Tab::Catalogo => catalogo(model),
                     Tab::Actualizaciones => actualizaciones(model),
                 };
-                col(percent(1.0), percent(1.0))
+                col(percent(1.0_f32), percent(1.0_f32))
                     .fill(t.bg_app)
                     .children(vec![header(model), body, footer(model)])
             }
@@ -618,12 +618,12 @@ fn bienvenida(model: &Model) -> View<Msg> {
 
     let logo = match &model.logo {
         Some(img) => View::new(Style {
-            size: Size { width: length(168.0), height: length(168.0) },
+            size: Size { width: length(168.0_f32), height: length(168.0_f32) },
             ..Default::default()
         })
         .image(img.clone()),
         None => View::new(Style {
-            size: Size { width: length(168.0), height: length(168.0) },
+            size: Size { width: length(168.0_f32), height: length(168.0_f32) },
             align_items: Some(AlignItems::Center),
             justify_content: Some(JustifyContent::Center),
             ..Default::default()
@@ -634,18 +634,18 @@ fn bienvenida(model: &Model) -> View<Msg> {
     };
 
     let nombre = View::new(Style {
-        size: Size { width: percent(1.0), height: length(48.0) },
+        size: Size { width: percent(1.0_f32), height: length(48.0_f32) },
         ..Default::default()
     })
     .text_aligned(meta.name, 40.0, t.fg_text, Alignment::Center);
     let tagline = View::new(Style {
-        size: Size { width: percent(1.0), height: length(28.0) },
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
         ..Default::default()
     })
     .text_aligned(meta.tagline, 16.0, t.fg_muted, Alignment::Center);
 
     let comenzar = View::new(Style {
-        size: Size { width: length(220.0), height: length(46.0) },
+        size: Size { width: length(220.0_f32), height: length(46.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
@@ -657,7 +657,7 @@ fn bienvenida(model: &Model) -> View<Msg> {
 
     // "No mostrar de nuevo" — activado por defecto (es también actualizador).
     let sw = View::new(Style {
-        size: Size { width: length(54.0), height: length(28.0) },
+        size: Size { width: length(54.0_f32), height: length(28.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
@@ -668,22 +668,22 @@ fn bienvenida(model: &Model) -> View<Msg> {
         &SwitchPalette::from_theme(t),
     )]);
     let chk_label = View::new(Style {
-        size: Size { width: length(180.0), height: length(28.0) },
+        size: Size { width: length(180.0_f32), height: length(28.0_f32) },
         ..Default::default()
     })
     .text_aligned(rimay_localize::t("churay-no-mostrar"), 13.0, t.fg_muted, Alignment::Start)
     .on_click(Msg::ToggleSkipWelcome);
     let chk = View::new(Style {
         flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0), height: length(30.0) },
+        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
-        gap: Size { width: length(8.0), height: length(0.0) },
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
         ..Default::default()
     })
     .children(vec![sw, chk_label]);
 
-    col(percent(1.0), percent(1.0))
+    col(percent(1.0_f32), percent(1.0_f32))
         .fill(t.bg_app)
         .gap(18.0)
         .pad(40.0)
@@ -704,7 +704,7 @@ fn resultado(model: &Model) -> View<Msg> {
     let t = &model.theme;
 
     let titulo = View::new(Style {
-        size: Size { width: percent(1.0), height: length(40.0) },
+        size: Size { width: percent(1.0_f32), height: length(40.0_f32) },
         ..Default::default()
     })
     .text_aligned(rimay_localize::t("churay-listo"), 28.0, t.fg_text, Alignment::Start);
@@ -740,7 +740,7 @@ fn resultado(model: &Model) -> View<Msg> {
         );
         let add = boton(&rimay_localize::t("churay-instalar-sugeridas"), t.accent, t.bg_app, 170.0, Msg::InstalarSugeridasResultado);
         filas.push(
-            row(percent(1.0), length(40.0))
+            row(percent(1.0_f32), length(40.0_f32))
                 .gap(10.0)
                 .pad(8.0)
                 .fill(t.bg_input)
@@ -752,17 +752,17 @@ fn resultado(model: &Model) -> View<Msg> {
     // Acciones finales.
     let volver = boton(&rimay_localize::t("churay-volver-catalogo"), t.bg_button, t.fg_text, 180.0, Msg::VolverCatalogo);
     let cerrar = boton(&rimay_localize::t("close"), t.bg_button, t.fg_text, 110.0, Msg::Cerrar);
-    let acciones = row(percent(1.0), length(40.0))
+    let acciones = row(percent(1.0_f32), length(40.0_f32))
         .gap(10.0)
         .justify(JustifyContent::End)
         .children(vec![volver, cerrar]);
 
-    col(percent(1.0), percent(1.0))
+    col(percent(1.0_f32), percent(1.0_f32))
         .fill(t.bg_app)
         .gap(10.0)
         .pad(28.0)
         .children(vec![
-            col(percent(1.0), llimphi_ui::llimphi_layout::taffy::prelude::auto())
+            col(percent(1.0_f32), llimphi_ui::llimphi_layout::taffy::prelude::auto())
                 .gap(8.0)
                 .grow()
                 .children(filas),
@@ -775,14 +775,14 @@ fn resultado(model: &Model) -> View<Msg> {
 fn fila_resultado_ok(model: &Model, u: &Unit, t: &Theme) -> View<Msg> {
     let bin = model.cfg.prefix.join("bin").join(&u.program);
     let mut info_hijos = vec![
-        View::new(Style { size: Size { width: percent(1.0), height: length(20.0) }, ..Default::default() })
+        View::new(Style { size: Size { width: percent(1.0_f32), height: length(20.0_f32) }, ..Default::default() })
             .text_aligned(
                 rimay_localize::t_args("churay-fila-ok", &[("label", u.label.clone().into())]),
                 16.0,
                 t.accent,
                 Alignment::Start,
             ),
-        View::new(Style { size: Size { width: percent(1.0), height: length(16.0) }, ..Default::default() })
+        View::new(Style { size: Size { width: percent(1.0_f32), height: length(16.0_f32) }, ..Default::default() })
             .text_aligned(
                 rimay_localize::t_args(
                     "churay-en-menu",
@@ -796,11 +796,11 @@ fn fila_resultado_ok(model: &Model, u: &Unit, t: &Theme) -> View<Msg> {
     // Instrucción exacta si la pieza la necesita (p.ej. la barra no se abre sola).
     if let Some(nota) = &u.post_install {
         info_hijos.push(
-            View::new(Style { size: Size { width: percent(1.0), height: length(16.0) }, ..Default::default() })
+            View::new(Style { size: Size { width: percent(1.0_f32), height: length(16.0_f32) }, ..Default::default() })
                 .text_aligned(format!("ⓘ {nota}"), 11.0, t.accent, Alignment::Start),
         );
     }
-    let alto = if u.post_install.is_some() { 60.0 } else { 46.0 };
+    let alto: f32 = if u.post_install.is_some() { 60.0 } else { 46.0 };
     let info = View::new(Style {
         flex_direction: FlexDirection::Column,
         flex_grow: 1.0,
@@ -815,7 +815,7 @@ fn fila_resultado_ok(model: &Model, u: &Unit, t: &Theme) -> View<Msg> {
     if u.launchable && !u.requires_root() {
         hijos.push(boton(&rimay_localize::t("open"), t.accent, t.bg_app, 90.0, Msg::Lanzar(u.program.clone())));
     }
-    row(percent(1.0), length(alto)).gap(10.0).pad_x(6.0).children(hijos)
+    row(percent(1.0_f32), length(alto)).gap(10.0).pad_x(6.0).children(hijos)
 }
 
 /// Instrucción según el modo de instalación (local vs sistema).
@@ -834,7 +834,7 @@ fn instruccion_modo(model: &Model) -> String {
 /// Botón compacto reutilizable.
 fn boton(label: &str, bg: Color, fg: Color, w: f32, msg: Msg) -> View<Msg> {
     View::new(Style {
-        size: Size { width: length(w), height: length(34.0) },
+        size: Size { width: length(w), height: length(34.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
@@ -848,7 +848,7 @@ fn boton(label: &str, bg: Color, fg: Color, w: f32, msg: Msg) -> View<Msg> {
 /// Centra horizontalmente un hijo en una fila de ancho completo.
 fn wrap_center(child: View<Msg>) -> View<Msg> {
     View::new(Style {
-        size: Size { width: percent(1.0), height: llimphi_ui::llimphi_layout::taffy::prelude::auto() },
+        size: Size { width: percent(1.0_f32), height: llimphi_ui::llimphi_layout::taffy::prelude::auto() },
         justify_content: Some(JustifyContent::Center),
         align_items: Some(AlignItems::Center),
         ..Default::default()
@@ -873,7 +873,7 @@ fn header(model: &Model) -> View<Msg> {
     ];
 
     // Tabs.
-    let tabs = row(percent(1.0), length(34.0)).gap(8.0).children(vec![
+    let tabs = row(percent(1.0_f32), length(34.0_f32)).gap(8.0).children(vec![
         tabchip(&rimay_localize::t("churay-tab-catalogo"), model.tab == Tab::Catalogo, Msg::Tab(Tab::Catalogo), t),
         tabchip(
             &rimay_localize::t("churay-tab-actualizaciones"),
@@ -883,7 +883,7 @@ fn header(model: &Model) -> View<Msg> {
         ),
     ]);
 
-    let barra = row(percent(1.0), length(44.0))
+    let barra = row(percent(1.0_f32), length(44.0_f32))
         .gap(10.0)
         .children(std::mem::take(&mut hijos));
 
@@ -894,7 +894,7 @@ fn header(model: &Model) -> View<Msg> {
         secciones.push(banner_root(t));
     }
 
-    col(percent(1.0), auto())
+    col(percent(1.0_f32), auto())
         .gap(10.0)
         .pad(20.0)
         .fill(t.bg_panel)
@@ -913,7 +913,7 @@ fn banner_root(t: &Theme) -> View<Msg> {
         Alignment::Start,
     );
     let boton = View::new(Style {
-        size: Size { width: length(170.0), height: length(30.0) },
+        size: Size { width: length(170.0_f32), height: length(30.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
@@ -922,7 +922,7 @@ fn banner_root(t: &Theme) -> View<Msg> {
     .radius(8.0)
     .text(rimay_localize::t("churay-reabrir-root"), 13.0, t.bg_app)
     .on_click(Msg::ReexecRoot);
-    row(percent(1.0), length(40.0))
+    row(percent(1.0_f32), length(40.0_f32))
         .gap(10.0)
         .pad(8.0)
         .fill(t.bg_input)
@@ -934,7 +934,7 @@ fn catalogo(model: &Model) -> View<Msg> {
     let t = &model.theme;
     let vis = model.visibles();
     let filas: Vec<View<Msg>> = vis.iter().map(|&i| fila(model, i)).collect();
-    let lista = col(percent(1.0), auto())
+    let lista = col(percent(1.0_f32), auto())
         .children(filas);
 
     let scroller = scroll_y(
@@ -948,13 +948,13 @@ fn catalogo(model: &Model) -> View<Msg> {
 
     let wrap = View::new(Style {
         flex_grow: 1.0,
-        size: Size { width: percent(1.0), height: length(VIEWPORT - 64.0) },
+        size: Size { width: percent(1.0_f32), height: length(VIEWPORT - 64.0) },
         ..Default::default()
     })
     .clip(true)
     .children(vec![scroller]);
 
-    col(percent(1.0), length(VIEWPORT))
+    col(percent(1.0_f32), length(VIEWPORT))
         .pad(16.0)
         .gap(10.0)
         .children(vec![base_card(t), wrap])
@@ -965,7 +965,7 @@ fn catalogo(model: &Model) -> View<Msg> {
 fn base_card(t: &Theme) -> View<Msg> {
     let accent = t.accent;
     let badge = View::new(Style {
-        size: Size { width: length(48.0), height: length(48.0) },
+        size: Size { width: length(48.0_f32), height: length(48.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
@@ -974,14 +974,14 @@ fn base_card(t: &Theme) -> View<Msg> {
     .radius(12.0)
     .text("🖥", 26.0, accent);
 
-    let textos = col(percent(1.0), llimphi_ui::llimphi_layout::taffy::prelude::auto())
+    let textos = col(percent(1.0_f32), llimphi_ui::llimphi_layout::taffy::prelude::auto())
         .gap(3.0)
         .grow()
         .children(vec![
-            View::new(Style { size: Size { width: percent(1.0), height: length(22.0) }, ..Default::default() })
+            View::new(Style { size: Size { width: percent(1.0_f32), height: length(22.0_f32) }, ..Default::default() })
                 .text_aligned(rimay_localize::t("churay-escritorio-completo"), 17.0, t.fg_text, Alignment::Start)
                 .text_weight(700.0),
-            View::new(Style { size: Size { width: percent(1.0), height: length(18.0) }, ..Default::default() })
+            View::new(Style { size: Size { width: percent(1.0_f32), height: length(18.0_f32) }, ..Default::default() })
                 .text_aligned(
                     rimay_localize::t("churay-base-card-sub"),
                     12.0,
@@ -990,12 +990,12 @@ fn base_card(t: &Theme) -> View<Msg> {
                 ),
         ]);
 
-    let chevron = View::new(Style { size: Size { width: length(34.0), height: length(34.0) }, align_items: Some(AlignItems::Center), justify_content: Some(JustifyContent::Center), ..Default::default() })
+    let chevron = View::new(Style { size: Size { width: length(34.0_f32), height: length(34.0_f32) }, align_items: Some(AlignItems::Center), justify_content: Some(JustifyContent::Center), ..Default::default() })
         .fill(accent)
         .radius(17.0)
         .text("›", 22.0, t.bg_app);
 
-    row(percent(1.0), length(72.0))
+    row(percent(1.0_f32), length(72.0_f32))
         .gap(14.0)
         .pad(12.0)
         .fill(t.bg_panel)
@@ -1012,9 +1012,9 @@ fn sistema_base(model: &Model) -> View<Msg> {
     let t = &model.theme;
     let needs_root = InstallConfig::detect(InstallMode::System).needs_root();
 
-    let titulo = View::new(Style { size: Size { width: percent(1.0), height: length(30.0) }, ..Default::default() })
+    let titulo = View::new(Style { size: Size { width: percent(1.0_f32), height: length(30.0_f32) }, ..Default::default() })
         .text_aligned(rimay_localize::t("churay-sistemabase-titulo"), 22.0, t.fg_text, Alignment::Start);
-    let sub = View::new(Style { size: Size { width: percent(1.0), height: length(20.0) }, ..Default::default() })
+    let sub = View::new(Style { size: Size { width: percent(1.0_f32), height: length(20.0_f32) }, ..Default::default() })
         .text_aligned(
             rimay_localize::t("churay-sistemabase-sub"),
             12.0,
@@ -1033,19 +1033,19 @@ fn sistema_base(model: &Model) -> View<Msg> {
     // Filas de componentes (todos marcados por defecto).
     let mut filas: Vec<View<Msg>> = Vec::new();
     for (i, c) in model.base.iter().enumerate() {
-        let sw = View::new(Style { size: Size { width: length(54.0), height: length(40.0) }, align_items: Some(AlignItems::Center), justify_content: Some(JustifyContent::Center), ..Default::default() })
+        let sw = View::new(Style { size: Size { width: length(54.0_f32), height: length(40.0_f32) }, align_items: Some(AlignItems::Center), justify_content: Some(JustifyContent::Center), ..Default::default() })
             .children(vec![switch_view(
                 if model.base_sel[i] { 1.0 } else { 0.0 },
                 Msg::ToggleBaseComp(i),
                 &SwitchPalette::from_theme(t),
             )]);
-        let textos = col(percent(1.0), llimphi_ui::llimphi_layout::taffy::prelude::auto())
+        let textos = col(percent(1.0_f32), llimphi_ui::llimphi_layout::taffy::prelude::auto())
             .gap(2.0)
             .grow()
             .children(vec![
-                View::new(Style { size: Size { width: percent(1.0), height: length(18.0) }, ..Default::default() })
+                View::new(Style { size: Size { width: percent(1.0_f32), height: length(18.0_f32) }, ..Default::default() })
                     .text_aligned(c.label, 14.0, t.fg_text, Alignment::Start),
-                View::new(Style { size: Size { width: percent(1.0), height: length(16.0) }, ..Default::default() })
+                View::new(Style { size: Size { width: percent(1.0_f32), height: length(16.0_f32) }, ..Default::default() })
                     .text_aligned(c.description, 11.0, t.fg_muted, Alignment::Start),
             ]);
         let estado = {
@@ -1055,10 +1055,10 @@ fn sistema_base(model: &Model) -> View<Msg> {
                 UnitStatus::Failed(_) => ("✗".to_string(), t.fg_destructive),
                 UnitStatus::Idle => (String::new(), t.fg_muted),
             };
-            View::new(Style { size: Size { width: length(90.0), height: length(40.0) }, align_items: Some(AlignItems::Center), justify_content: Some(JustifyContent::Center), ..Default::default() })
+            View::new(Style { size: Size { width: length(90.0_f32), height: length(40.0_f32) }, align_items: Some(AlignItems::Center), justify_content: Some(JustifyContent::Center), ..Default::default() })
                 .text(txt, 12.0, color)
         };
-        filas.push(row(percent(1.0), length(44.0)).gap(8.0).pad_x(6.0).children(vec![sw, textos, estado]));
+        filas.push(row(percent(1.0_f32), length(44.0_f32)).gap(8.0).pad_x(6.0).children(vec![sw, textos, estado]));
     }
 
     // Acciones.
@@ -1073,12 +1073,12 @@ fn sistema_base(model: &Model) -> View<Msg> {
     let activo = n_sel > 0 && !model.base_installing && (!needs_root || !model.password.is_empty());
     let bg = if activo { t.accent } else { t.bg_button };
     let fg = if activo { t.bg_app } else { t.fg_muted };
-    let mut instalar = View::new(Style { size: Size { width: length(170.0), height: length(36.0) }, align_items: Some(AlignItems::Center), justify_content: Some(JustifyContent::Center), ..Default::default() })
+    let mut instalar = View::new(Style { size: Size { width: length(170.0_f32), height: length(36.0_f32) }, align_items: Some(AlignItems::Center), justify_content: Some(JustifyContent::Center), ..Default::default() })
         .fill(bg).radius(8.0).text(label_btn, 15.0, fg);
     if activo {
         instalar = instalar.on_click(Msg::InstalarBase);
     }
-    let acciones = row(percent(1.0), length(40.0))
+    let acciones = row(percent(1.0_f32), length(40.0_f32))
         .gap(10.0)
         .children(vec![
             View::new(Style { flex_grow: 1.0, ..Default::default() }).text_aligned(
@@ -1097,13 +1097,13 @@ fn sistema_base(model: &Model) -> View<Msg> {
             instalar,
         ]);
 
-    let cuerpo = col(percent(1.0), llimphi_ui::llimphi_layout::taffy::prelude::auto())
+    let cuerpo = col(percent(1.0_f32), llimphi_ui::llimphi_layout::taffy::prelude::auto())
         .gap(4.0)
         .grow()
         .children(filas);
 
     let mut hijos = vec![
-        col(percent(1.0), llimphi_ui::llimphi_layout::taffy::prelude::auto()).gap(8.0).children(head),
+        col(percent(1.0_f32), llimphi_ui::llimphi_layout::taffy::prelude::auto()).gap(8.0).children(head),
         cuerpo,
     ];
     // Campo de contraseña sudo in-app (sólo si hace falta root y no terminó).
@@ -1115,7 +1115,7 @@ fn sistema_base(model: &Model) -> View<Msg> {
     }
     hijos.push(acciones);
 
-    col(percent(1.0), percent(1.0)).fill(t.bg_app).gap(10.0).pad(24.0).children(hijos)
+    col(percent(1.0_f32), percent(1.0_f32)).fill(t.bg_app).gap(10.0).pad(24.0).children(hijos)
 }
 
 /// El campo de contraseña de sudo, enmascarado, que se llena tecleando (lo
@@ -1128,7 +1128,7 @@ fn campo_password(model: &Model, t: &Theme) -> View<Msg> {
         (format!("🔒  {dots}"), t.fg_text)
     };
     View::new(Style {
-        size: Size { width: percent(1.0), height: length(40.0) },
+        size: Size { width: percent(1.0_f32), height: length(40.0_f32) },
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
@@ -1151,7 +1151,7 @@ fn fila(model: &Model, i: usize) -> View<Msg> {
         &SwitchPalette::from_theme(t),
     );
     let sw_wrap = View::new(Style {
-        size: Size { width: length(54.0), height: length(ROW_H) },
+        size: Size { width: length(54.0_f32), height: length(ROW_H) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
@@ -1160,7 +1160,7 @@ fn fila(model: &Model, i: usize) -> View<Msg> {
 
     // Ícono en una pastilla tintada por cuadrante.
     let icono = View::new(Style {
-        size: Size { width: length(38.0), height: length(38.0) },
+        size: Size { width: length(38.0_f32), height: length(38.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
@@ -1171,7 +1171,7 @@ fn fila(model: &Model, i: usize) -> View<Msg> {
     // catálogo); el nodo-pastilla ya tiene tamaño fijo 38×38.
     .children(vec![llimphi_icons::glyph_or_text_view(&u.icon, 20.0, icon_color(&u.category), 1.7)]);
     let icono = View::new(Style {
-        size: Size { width: length(46.0), height: length(ROW_H) },
+        size: Size { width: length(46.0_f32), height: length(ROW_H) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
@@ -1179,16 +1179,16 @@ fn fila(model: &Model, i: usize) -> View<Msg> {
     .children(vec![icono]);
 
     let titulo = View::new(Style {
-        size: Size { width: percent(1.0), height: length(22.0) },
+        size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
         ..Default::default()
     })
     .text_aligned(u.label.as_str(), 16.0, t.fg_text, Alignment::Start);
     let desc = View::new(Style {
-        size: Size { width: percent(1.0), height: length(18.0) },
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
         ..Default::default()
     })
     .text_aligned(u.description.as_str(), 12.0, t.fg_muted, Alignment::Start);
-    let medio = col(percent(1.0), auto())
+    let medio = col(percent(1.0_f32), auto())
         .gap(2.0)
         .grow()
         .children(vec![titulo, desc]);
@@ -1197,7 +1197,7 @@ fn fila(model: &Model, i: usize) -> View<Msg> {
 
     // Pop-in: cada fila entra con un fade la primera vez que aparece su key
     // (estable por id de unidad).
-    row(percent(1.0), length(ROW_H))
+    row(percent(1.0_f32), length(ROW_H))
         .gap(8.0)
         .pad_x(6.0)
         .children(vec![sw_wrap, icono, medio, estado])
@@ -1218,7 +1218,7 @@ fn estado_view(model: &Model, i: usize, instalada: bool, t: &Theme) -> View<Msg>
         }
     };
     View::new(Style {
-        size: Size { width: length(110.0), height: length(ROW_H) },
+        size: Size { width: length(110.0_f32), height: length(ROW_H) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
@@ -1248,7 +1248,7 @@ fn actualizaciones(model: &Model) -> View<Msg> {
     };
     let tiene_repo = model.cfg.remote_base_url.is_some();
     let mut btn = View::new(Style {
-        size: Size { width: length(220.0), height: length(32.0) },
+        size: Size { width: length(220.0_f32), height: length(32.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
@@ -1276,7 +1276,7 @@ fn actualizaciones(model: &Model) -> View<Msg> {
         t.fg_muted,
         Alignment::Start,
     );
-    let cabecera = row(percent(1.0), length(34.0)).gap(10.0).children(vec![estado_repo, btn]);
+    let cabecera = row(percent(1.0_f32), length(34.0_f32)).gap(10.0).children(vec![estado_repo, btn]);
 
     let mut hijos: Vec<View<Msg>> = vec![cabecera];
     hijos.push(linea(
@@ -1341,7 +1341,7 @@ fn actualizaciones(model: &Model) -> View<Msg> {
         }
     }
 
-    col(percent(1.0), length(VIEWPORT)).pad(20.0).gap(8.0).children(hijos)
+    col(percent(1.0_f32), length(VIEWPORT)).pad(20.0).gap(8.0).children(hijos)
 }
 
 fn footer(model: &Model) -> View<Msg> {
@@ -1365,16 +1365,16 @@ fn footer(model: &Model) -> View<Msg> {
         Alignment::Start,
     );
 
-    let acciones = row(auto(), length(34.0))
+    let acciones = row(auto(), length(34.0_f32))
         .gap(8.0)
         .children(vec![
             View::new(Style {
-                size: Size { width: length(90.0), height: length(34.0) },
+                size: Size { width: length(90.0_f32), height: length(34.0_f32) },
                 ..Default::default()
             })
             .children(vec![button_view(rimay_localize::t("churay-todo"), &ButtonPalette::from_theme(t), Msg::SeleccionarTodo(true))]),
             View::new(Style {
-                size: Size { width: length(90.0), height: length(34.0) },
+                size: Size { width: length(90.0_f32), height: length(34.0_f32) },
                 ..Default::default()
             })
             .children(vec![button_view(rimay_localize::t("churay-nada"), &ButtonPalette::from_theme(t), Msg::SeleccionarTodo(false))]),
@@ -1394,7 +1394,7 @@ fn footer(model: &Model) -> View<Msg> {
             Alignment::Start,
         );
         let add = View::new(Style {
-            size: Size { width: length(150.0), height: length(30.0) },
+            size: Size { width: length(150.0_f32), height: length(30.0_f32) },
             align_items: Some(AlignItems::Center),
             justify_content: Some(JustifyContent::Center),
             ..Default::default()
@@ -1404,7 +1404,7 @@ fn footer(model: &Model) -> View<Msg> {
         .text(rimay_localize::t("churay-agregar-sugeridas"), 12.0, t.bg_app)
         .on_click(Msg::AgregarSugeridas);
         hijos.push(
-            row(percent(1.0), length(38.0))
+            row(percent(1.0_f32), length(38.0_f32))
                 .gap(10.0)
                 .pad(8.0)
                 .fill(t.bg_input)
@@ -1435,7 +1435,7 @@ fn footer(model: &Model) -> View<Msg> {
         ));
     }
 
-    hijos.push(row(percent(1.0), length(34.0)).gap(10.0).children(vec![resumen, acciones]));
+    hijos.push(row(percent(1.0_f32), length(34.0_f32)).gap(10.0).children(vec![resumen, acciones]));
 
     if model.installing {
         let total = model.units.len().max(1) as f32;
@@ -1447,7 +1447,7 @@ fn footer(model: &Model) -> View<Msg> {
         hijos.push(linear_progress_view(hechas / total, t.bg_input, t.accent, 6.0));
     }
 
-    col(percent(1.0), auto())
+    col(percent(1.0_f32), auto())
         .gap(10.0)
         .pad(20.0)
         .fill(t.bg_panel)
@@ -1464,7 +1464,7 @@ fn instalar_boton(model: &Model, n_sel: usize, t: &Theme) -> View<Msg> {
     let bg = if activo { t.accent } else { t.bg_button };
     let fg = if activo { t.bg_app } else { t.fg_muted };
     let mut v = View::new(Style {
-        size: Size { width: length(150.0), height: length(34.0) },
+        size: Size { width: length(150.0_f32), height: length(34.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
@@ -1533,7 +1533,7 @@ fn paso_label(step: Step, r: f32) -> String {
 
 fn linea(txt: &str, color: Color, _t: &Theme) -> View<Msg> {
     View::new(Style {
-        size: Size { width: percent(1.0), height: length(24.0) },
+        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
         ..Default::default()
     })
     .text_aligned(txt, 14.0, color, Alignment::Start)
@@ -1543,7 +1543,7 @@ fn chip(label: &str, active: bool, msg: Msg, t: &Theme) -> View<Msg> {
     let bg = if active { t.accent } else { t.bg_button };
     let fg = if active { t.bg_app } else { t.fg_text };
     View::new(Style {
-        size: Size { width: length(120.0), height: length(34.0) },
+        size: Size { width: length(120.0_f32), height: length(34.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
@@ -1558,7 +1558,7 @@ fn tabchip(label: &str, active: bool, msg: Msg, t: &Theme) -> View<Msg> {
     let fg = if active { t.fg_text } else { t.fg_muted };
     let bg = if active { t.bg_input } else { t.bg_panel };
     View::new(Style {
-        size: Size { width: length(160.0), height: length(30.0) },
+        size: Size { width: length(160.0_f32), height: length(30.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
@@ -1587,7 +1587,7 @@ impl ViewExt for View<Msg> {
         self
     }
     fn pad_x(mut self, p: f32) -> Self {
-        self.style.padding = Rect { left: length(p), right: length(p), top: length(0.0), bottom: length(0.0) };
+        self.style.padding = Rect { left: length(p), right: length(p), top: length(0.0_f32), bottom: length(0.0_f32) };
         self
     }
     fn grow(mut self) -> Self {

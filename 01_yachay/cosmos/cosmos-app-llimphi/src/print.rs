@@ -215,8 +215,8 @@ mod tests {
     fn rasteriza_view_a_png_valido() {
         let view: View<crate::model::Msg> = View::new(Style {
             size: Size {
-                width: length(200.0),
-                height: length(80.0),
+                width: length(200.0_f32),
+                height: length(80.0_f32),
             },
             ..Default::default()
         })

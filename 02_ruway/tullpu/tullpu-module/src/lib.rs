@@ -409,7 +409,7 @@ pub fn view<H: Clone + Send + Sync + 'static>(
     let cuerpo = View::new(Style {
         flex_direction: FlexDirection::Row,
         flex_grow: 1.0,
-        min_size: Size { width: length(0.0), height: length(0.0) },
+        min_size: Size { width: length(0.0_f32), height: length(0.0_f32) },
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
@@ -530,7 +530,7 @@ pub fn lienzo_view<H: Clone + Send + Sync + 'static>(
     let img = st.imagen.clone();
     let base = View::new(Style {
         flex_grow: 1.0,
-        min_size: Size { width: length(0.0), height: length(0.0) },
+        min_size: Size { width: length(0.0_f32), height: length(0.0_f32) },
         size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
@@ -715,7 +715,7 @@ fn capas_view<H: Clone + Send + Sync + 'static>(
         // Fluido: llena a su contenedor (el `view` standalone lo encajona a
         // CAPAS_W; `tools_panel` lo deja a ancho completo del diente).
         flex_grow: 1.0,
-        min_size: Size { width: length(0.0), height: length(0.0) },
+        min_size: Size { width: length(0.0_f32), height: length(0.0_f32) },
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })

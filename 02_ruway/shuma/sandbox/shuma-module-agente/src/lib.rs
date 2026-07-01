@@ -797,7 +797,7 @@ pub fn view<HostMsg: Clone + 'static>(
     let main = panel_view(state, theme, lift);
     View::new(Style {
         flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0), height: percent(1.0) },
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
     .fill(theme.bg_app)
@@ -825,8 +825,8 @@ fn sidebar_view<HostMsg: Clone + 'static>(
     hijos.push(
         View::new(Style {
             flex_direction: FlexDirection::Row,
-            size: Size { width: percent(1.0), height: length(30.0) },
-            gap: Size { width: length(6.0), height: length(0.0) },
+            size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+            gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
             padding: rect_xy(8.0, 2.0),
             ..Default::default()
         })
@@ -841,7 +841,7 @@ fn sidebar_view<HostMsg: Clone + 'static>(
     // Botón nueva conversación.
     hijos.push(
         View::new(Style {
-            size: Size { width: percent(1.0), height: length(36.0) },
+            size: Size { width: percent(1.0_f32), height: length(36.0_f32) },
             padding: rect_xy(8.0, 4.0),
             ..Default::default()
         })
@@ -863,7 +863,7 @@ fn sidebar_view<HostMsg: Clone + 'static>(
                 let tp = TextInputPalette::from_theme(theme);
                 hijos.push(
                     View::new(Style {
-                        size: Size { width: percent(1.0), height: length(26.0) },
+                        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
                         padding: rect_xy(6.0, 0.0),
                         ..Default::default()
                     })
@@ -881,7 +881,7 @@ fn sidebar_view<HostMsg: Clone + 'static>(
 
         let fila = View::new(Style {
             flex_direction: FlexDirection::Row,
-            size: Size { width: percent(1.0), height: length(26.0) },
+            size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
             align_items: Some(AlignItems::Center),
             ..Default::default()
         })
@@ -890,7 +890,7 @@ fn sidebar_view<HostMsg: Clone + 'static>(
             // Título: toma el ancho y abre la conversación.
             View::new(Style {
                 flex_grow: 1.0,
-                size: Size { width: Dimension::auto(), height: percent(1.0) },
+                size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
                 padding: rect_xy(10.0, 0.0),
                 align_items: Some(AlignItems::Center),
                 ..Default::default()
@@ -899,7 +899,7 @@ fn sidebar_view<HostMsg: Clone + 'static>(
             .on_click(lift(Msg::AbrirConversacion(i))),
             // «✎»: renombrar.
             View::new(Style {
-                size: Size { width: length(20.0), height: percent(1.0) },
+                size: Size { width: length(20.0_f32), height: percent(1.0_f32) },
                 align_items: Some(AlignItems::Center),
                 ..Default::default()
             })
@@ -907,7 +907,7 @@ fn sidebar_view<HostMsg: Clone + 'static>(
             .on_click(lift(Msg::RenombrarConversacion(i))),
             // «×»: borra la conversación.
             View::new(Style {
-                size: Size { width: length(20.0), height: percent(1.0) },
+                size: Size { width: length(20.0_f32), height: percent(1.0_f32) },
                 align_items: Some(AlignItems::Center),
                 ..Default::default()
             })
@@ -919,9 +919,9 @@ fn sidebar_view<HostMsg: Clone + 'static>(
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: length(SIDEBAR_W), height: percent(1.0) },
+        size: Size { width: length(SIDEBAR_W), height: percent(1.0_f32) },
         padding: rect_xy(0.0, 8.0),
-        gap: Size { width: length(0.0), height: length(2.0) },
+        gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
@@ -957,7 +957,7 @@ fn boton_mic<HostMsg: Clone + 'static>(
     // Enrolando: halo «grabando» en rojo cálido, anillos rápidos e intensos.
     let grabando = llimphi_ui::llimphi_raster::peniko::Color::from_rgb8(0xE0, 0x5A, 0x5A);
     View::new(Style {
-        size: Size { width: length(34.0), height: length(34.0) },
+        size: Size { width: length(34.0_f32), height: length(34.0_f32) },
         flex_shrink: 0.0,
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
@@ -1076,16 +1076,16 @@ fn panel_view<HostMsg: Clone + 'static>(
             turnos.push(
                 View::new(Style {
                     flex_direction: FlexDirection::Column,
-                    size: Size { width: percent(1.0), height: Dimension::auto() },
-                    gap: Size { width: length(0.0), height: length(4.0) },
+                    size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+                    gap: Size { width: length(0.0_f32), height: length(4.0_f32) },
                     padding: rect_xy(12.0, 8.0),
                     ..Default::default()
                 })
                 .fill(theme.bg_panel_alt)
                 .children(vec![
-                    View::new(Style { size: Size { width: percent(1.0), height: length(16.0) }, ..Default::default() })
+                    View::new(Style { size: Size { width: percent(1.0_f32), height: length(16.0_f32) }, ..Default::default() })
                         .text("IA", 11.0, theme.fg_muted),
-                    View::new(Style { size: Size { width: percent(1.0), height: Dimension::auto() }, ..Default::default() })
+                    View::new(Style { size: Size { width: percent(1.0_f32), height: Dimension::auto() }, ..Default::default() })
                         .text(format!("{parcial}▌"), 13.0, theme.fg_text),
                 ]),
             );
@@ -1095,8 +1095,8 @@ fn panel_view<HostMsg: Clone + 'static>(
 
     let contenido = View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: percent(1.0), height: Dimension::auto() },
-        gap: Size { width: length(0.0), height: length(10.0) },
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(0.0_f32), height: length(10.0_f32) },
         padding: rect_xy(16.0, 12.0),
         ..Default::default()
     })
@@ -1174,7 +1174,7 @@ fn panel_view<HostMsg: Clone + 'static>(
     // En idle, un acceso a enrolar el wake-word; enrolando, a cancelar; si no, Enviar.
     let accion = if state.enrolando.is_some() {
         View::new(Style {
-            size: Size { width: length(96.0), height: Dimension::auto() },
+            size: Size { width: length(96.0_f32), height: Dimension::auto() },
             ..Default::default()
         })
         .children(vec![button_view("Cancelar", &bp, lift(Msg::EnrolarCancelar))])
@@ -1183,24 +1183,24 @@ fn panel_view<HostMsg: Clone + 'static>(
         let etq = if state.wake_listo { "re-enrolar" } else { "enrolar voz" };
         View::new(Style {
             flex_direction: FlexDirection::Row,
-            gap: Size { width: length(8.0), height: length(0.0) },
+            gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
             ..Default::default()
         })
         .children(vec![
             View::new(Style {
-                size: Size { width: length(96.0), height: Dimension::auto() },
+                size: Size { width: length(96.0_f32), height: Dimension::auto() },
                 ..Default::default()
             })
             .children(vec![button_view(etq, &bp, lift(Msg::EnrolarWake))]),
             View::new(Style {
-                size: Size { width: length(96.0), height: Dimension::auto() },
+                size: Size { width: length(96.0_f32), height: Dimension::auto() },
                 ..Default::default()
             })
             .children(vec![button_view("Enviar", &bp, lift(Msg::Enviar))]),
         ])
     } else {
         View::new(Style {
-            size: Size { width: length(96.0), height: Dimension::auto() },
+            size: Size { width: length(96.0_f32), height: Dimension::auto() },
             ..Default::default()
         })
         .children(vec![button_view("Enviar", &bp, lift(Msg::Enviar))])
@@ -1209,8 +1209,8 @@ fn panel_view<HostMsg: Clone + 'static>(
 
     let barra = View::new(Style {
         flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0), height: length(40.0) },
-        gap: Size { width: length(8.0), height: length(0.0) },
+        size: Size { width: percent(1.0_f32), height: length(40.0_f32) },
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
         padding: rect_xy(12.0, 6.0),
         align_items: Some(AlignItems::Center),
         ..Default::default()
@@ -1220,7 +1220,7 @@ fn panel_view<HostMsg: Clone + 'static>(
 
     let hilo_wrap = View::new(Style {
         flex_grow: 1.0,
-        size: Size { width: percent(1.0), height: length(state.vista_alto) },
+        size: Size { width: percent(1.0_f32), height: length(state.vista_alto) },
         ..Default::default()
     })
     .children(vec![hilo]);
@@ -1228,7 +1228,7 @@ fn panel_view<HostMsg: Clone + 'static>(
     View::new(Style {
         flex_direction: FlexDirection::Column,
         flex_grow: 1.0,
-        size: Size { width: Dimension::auto(), height: percent(1.0) },
+        size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
         ..Default::default()
     })
     .fill(theme.bg_app)
@@ -1251,12 +1251,12 @@ fn editor_view<HostMsg: Clone + 'static>(
         let lift = lift.clone();
         View::new(Style {
             flex_direction: FlexDirection::Column,
-            size: Size { width: percent(1.0), height: Dimension::auto() },
-            gap: Size { width: length(0.0), height: length(2.0) },
+            size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+            gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
             ..Default::default()
         })
         .children(vec![
-            View::new(Style { size: Size { width: percent(1.0), height: length(14.0) }, ..Default::default() })
+            View::new(Style { size: Size { width: percent(1.0_f32), height: length(14.0_f32) }, ..Default::default() })
                 .text(etq, 10.0, theme.fg_muted),
             text_input_view(st, "", foco, &tp, lift(Msg::EditorFoco(c))),
         ])
@@ -1270,7 +1270,7 @@ fn editor_view<HostMsg: Clone + 'static>(
     let control_lbl = format!("control: {}", if ed.control { "sí" } else { "no" });
 
     let mut hijos = vec![
-        View::new(Style { size: Size { width: percent(1.0), height: length(22.0) }, ..Default::default() })
+        View::new(Style { size: Size { width: percent(1.0_f32), height: length(22.0_f32) }, ..Default::default() })
             .text(titulo, 14.0, theme.fg_text),
         campo("Nombre", &ed.nombre, ed.foco == Campo::Nombre, Campo::Nombre),
         campo("Modelo (vacío = default del backend)", &ed.modelo, ed.foco == Campo::Modelo, Campo::Modelo),
@@ -1278,8 +1278,8 @@ fn editor_view<HostMsg: Clone + 'static>(
         // Backend (cicla) + control (toggle).
         View::new(Style {
             flex_direction: FlexDirection::Row,
-            size: Size { width: percent(1.0), height: length(34.0) },
-            gap: Size { width: length(8.0), height: length(0.0) },
+            size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
+            gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
             ..Default::default()
         })
         .children(vec![
@@ -1306,8 +1306,8 @@ fn editor_view<HostMsg: Clone + 'static>(
     hijos.push(
         View::new(Style {
             flex_direction: FlexDirection::Row,
-            size: Size { width: percent(1.0), height: length(34.0) },
-            gap: Size { width: length(8.0), height: length(0.0) },
+            size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
+            gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
             ..Default::default()
         })
         .children(botones),
@@ -1316,8 +1316,8 @@ fn editor_view<HostMsg: Clone + 'static>(
     View::new(Style {
         flex_direction: FlexDirection::Column,
         flex_grow: 1.0,
-        size: Size { width: Dimension::auto(), height: percent(1.0) },
-        gap: Size { width: length(0.0), height: length(10.0) },
+        size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+        gap: Size { width: length(0.0_f32), height: length(10.0_f32) },
         padding: rect_xy(16.0, 14.0),
         ..Default::default()
     })
@@ -1339,7 +1339,7 @@ fn turno_view<HostMsg: Clone + 'static>(
     let color_pref = if es_usuario { theme.accent } else { theme.fg_muted };
 
     let mut hijos: Vec<View<HostMsg>> = vec![View::new(Style {
-        size: Size { width: percent(1.0), height: length(16.0) },
+        size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
         ..Default::default()
     })
     .text(prefijo, 11.0, color_pref)];
@@ -1354,7 +1354,7 @@ fn turno_view<HostMsg: Clone + 'static>(
     // Conteo de tokens del turno (paridad con Claude CLI), si lo hay.
     if let Some(u) = turno.uso.filter(|u| u.hay()) {
         hijos.push(
-            View::new(Style { size: Size { width: percent(1.0), height: length(14.0) }, ..Default::default() })
+            View::new(Style { size: Size { width: percent(1.0_f32), height: length(14.0_f32) }, ..Default::default() })
                 .text(format!("↑{} ↓{} tokens", u.entrada, u.salida), 10.0, theme.fg_muted),
         );
         alto += 16.0;
@@ -1362,8 +1362,8 @@ fn turno_view<HostMsg: Clone + 'static>(
 
     let v = View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: percent(1.0), height: Dimension::auto() },
-        gap: Size { width: length(0.0), height: length(4.0) },
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(0.0_f32), height: length(4.0_f32) },
         padding: rect_xy(12.0, 8.0),
         ..Default::default()
     })
@@ -1383,7 +1383,7 @@ fn bloque_view<HostMsg: Clone + 'static>(
         BloqueSalida::Texto(t) => {
             let alto = estimar_alto_texto(t, 13.0);
             (
-                View::new(Style { size: Size { width: percent(1.0), height: Dimension::auto() }, ..Default::default() })
+                View::new(Style { size: Size { width: percent(1.0_f32), height: Dimension::auto() }, ..Default::default() })
                     .text(t, 13.0, theme.fg_text),
                 alto,
             )
@@ -1393,15 +1393,15 @@ fn bloque_view<HostMsg: Clone + 'static>(
             let alto = estimar_alto_texto(codigo, 12.5) + 16.0;
             let v = View::new(Style {
                 flex_direction: FlexDirection::Column,
-                size: Size { width: percent(1.0), height: Dimension::auto() },
+                size: Size { width: percent(1.0_f32), height: Dimension::auto() },
                 padding: rect_xy(10.0, 8.0),
                 ..Default::default()
             })
             .fill(theme.bg_app)
             .children(vec![
-                View::new(Style { size: Size { width: percent(1.0), height: length(12.0) }, ..Default::default() })
+                View::new(Style { size: Size { width: percent(1.0_f32), height: length(12.0_f32) }, ..Default::default() })
                     .text(etiqueta, 10.0, theme.fg_muted),
-                View::new(Style { size: Size { width: percent(1.0), height: Dimension::auto() }, ..Default::default() })
+                View::new(Style { size: Size { width: percent(1.0_f32), height: Dimension::auto() }, ..Default::default() })
                     .text(codigo, 12.5, theme.fg_text),
             ]);
             (v, alto)
@@ -1412,21 +1412,21 @@ fn bloque_view<HostMsg: Clone + 'static>(
             match decodificar_imagen(data_base64) {
                 Some(img) => (
                     View::new(Style {
-                        size: Size { width: length(240.0), height: length(alto) },
+                        size: Size { width: length(240.0_f32), height: length(alto) },
                         ..Default::default()
                     })
                     .image(img),
                     alto + 6.0,
                 ),
                 None => (
-                    View::new(Style { size: Size { width: percent(1.0), height: length(18.0) }, ..Default::default() })
+                    View::new(Style { size: Size { width: percent(1.0_f32), height: length(18.0_f32) }, ..Default::default() })
                         .text("🖼 imagen (no se pudo mostrar)", 12.0, theme.fg_muted),
                     22.0,
                 ),
             }
         }
         BloqueSalida::Error(e) => (
-            View::new(Style { size: Size { width: percent(1.0), height: Dimension::auto() }, ..Default::default() })
+            View::new(Style { size: Size { width: percent(1.0_f32), height: Dimension::auto() }, ..Default::default() })
                 .text(format!("⚠ {e}"), 12.5, theme.fg_destructive),
             estimar_alto_texto(e, 12.5),
         ),
@@ -1449,9 +1449,9 @@ fn accion_view<HostMsg: Clone + 'static>(
     let cabecera = format!("⚡ {} · [{}]", a.id, a.peligro.etiqueta());
 
     let mut hijos = vec![
-        View::new(Style { size: Size { width: percent(1.0), height: length(16.0) }, ..Default::default() })
+        View::new(Style { size: Size { width: percent(1.0_f32), height: length(16.0_f32) }, ..Default::default() })
             .text(cabecera, 11.0, acento),
-        View::new(Style { size: Size { width: percent(1.0), height: Dimension::auto() }, ..Default::default() })
+        View::new(Style { size: Size { width: percent(1.0_f32), height: Dimension::auto() }, ..Default::default() })
             .text(&a.linea_comando, 12.5, theme.fg_text),
     ];
 
@@ -1459,14 +1459,14 @@ fn accion_view<HostMsg: Clone + 'static>(
     let bp = ButtonPalette::from_theme(theme);
     let fila = match a.estado {
         EstadoAccion::Propuesta => {
-            let aprobar = View::new(Style { size: Size { width: length(96.0), height: Dimension::auto() }, ..Default::default() })
+            let aprobar = View::new(Style { size: Size { width: length(96.0_f32), height: Dimension::auto() }, ..Default::default() })
                 .children(vec![button_view("aprobar", &bp, lift.clone()(Msg::Aprobar { turno, bloque }))]);
-            let rechazar = View::new(Style { size: Size { width: length(96.0), height: Dimension::auto() }, ..Default::default() })
+            let rechazar = View::new(Style { size: Size { width: length(96.0_f32), height: Dimension::auto() }, ..Default::default() })
                 .children(vec![button_view("rechazar", &bp, lift(Msg::Rechazar { turno, bloque }))]);
             View::new(Style {
                 flex_direction: FlexDirection::Row,
-                gap: Size { width: length(8.0), height: length(0.0) },
-                size: Size { width: percent(1.0), height: length(34.0) },
+                gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+                size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
                 ..Default::default()
             })
             .children(vec![aprobar, rechazar])
@@ -1479,7 +1479,7 @@ fn accion_view<HostMsg: Clone + 'static>(
                 EstadoAccion::Fallida => ("⚠ falló", theme.fg_destructive),
                 EstadoAccion::Propuesta => ("", theme.fg_muted),
             };
-            View::new(Style { size: Size { width: percent(1.0), height: length(20.0) }, ..Default::default() })
+            View::new(Style { size: Size { width: percent(1.0_f32), height: length(20.0_f32) }, ..Default::default() })
                 .text(txt, 11.0, col)
         }
     };
@@ -1487,8 +1487,8 @@ fn accion_view<HostMsg: Clone + 'static>(
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: percent(1.0), height: Dimension::auto() },
-        gap: Size { width: length(0.0), height: length(6.0) },
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
         padding: rect_xy(10.0, 8.0),
         ..Default::default()
     })
@@ -1500,7 +1500,7 @@ fn accion_view<HostMsg: Clone + 'static>(
 
 fn rotulo<HostMsg: Clone + 'static>(txt: &str, theme: &Theme) -> View<HostMsg> {
     View::new(Style {
-        size: Size { width: percent(1.0), height: length(20.0) },
+        size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
         padding: rect_xy(10.0, 4.0),
         ..Default::default()
     })
@@ -1515,7 +1515,7 @@ fn fila_seleccionable<HostMsg: Clone + 'static>(
     let bg = if sel { theme.bg_selected } else { theme.bg_panel_alt };
     let fg = if sel { theme.fg_text } else { theme.fg_muted };
     View::new(Style {
-        size: Size { width: percent(1.0), height: length(26.0) },
+        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
         padding: rect_xy(10.0, 0.0),
         align_items: Some(AlignItems::Center),
         ..Default::default()

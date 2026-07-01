@@ -328,8 +328,8 @@ fn graph_zoom_controls(zoom: f32, theme: &Theme) -> View<Msg> {
     let pal = ButtonPalette::from_theme(theme);
     let mini = || Style {
         size: Size {
-            width: length(30.0),
-            height: length(26.0),
+            width: length(30.0_f32),
+            height: length(26.0_f32),
         },
         flex_shrink: 0.0,
         align_items: Some(AlignItems::Center),
@@ -338,8 +338,8 @@ fn graph_zoom_controls(zoom: f32, theme: &Theme) -> View<Msg> {
     };
     let pct = View::new(Style {
         size: Size {
-            width: length(52.0),
-            height: length(26.0),
+            width: length(52.0_f32),
+            height: length(26.0_f32),
         },
         flex_shrink: 0.0,
         align_items: Some(AlignItems::Center),
@@ -571,7 +571,7 @@ pub(crate) fn build_list_panel(model: &Model, mod_idx: usize, lv: &ListView, the
     let title = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: length(24.0),
+            height: length(24.0_f32),
         },
         flex_grow: 1.0,
         align_items: Some(AlignItems::Center),
@@ -611,12 +611,12 @@ pub(crate) fn build_list_panel(model: &Model, mod_idx: usize, lv: &ListView, the
         flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
-            height: length(34.0),
+            height: length(34.0_f32),
         },
         align_items: Some(AlignItems::Center),
         gap: Size {
-            width: length(8.0),
-            height: length(0.0),
+            width: length(8.0_f32),
+            height: length(0.0_f32),
         },
         ..Default::default()
     })
@@ -659,7 +659,7 @@ pub(crate) fn build_list_panel(model: &Model, mod_idx: usize, lv: &ListView, the
             View::new(Style {
                 size: Size {
                     width: percent(1.0_f32),
-                    height: length(22.0),
+                    height: length(22.0_f32),
                 },
                 flex_grow: 1.0,
                 align_items: Some(AlignItems::Center),
@@ -679,12 +679,12 @@ pub(crate) fn build_list_panel(model: &Model, mod_idx: usize, lv: &ListView, the
             flex_direction: FlexDirection::Row,
             size: Size {
                 width: percent(1.0_f32),
-                height: length(24.0),
+                height: length(24.0_f32),
             },
             align_items: Some(AlignItems::Center),
             gap: Size {
-                width: length(8.0),
-                height: length(0.0),
+                width: length(8.0_f32),
+                height: length(0.0_f32),
             },
             ..Default::default()
         })
@@ -757,12 +757,12 @@ pub(crate) fn build_list_panel(model: &Model, mod_idx: usize, lv: &ListView, the
                 flex_direction: FlexDirection::Row,
                 size: Size {
                     width: percent(1.0_f32),
-                    height: length(30.0),
+                    height: length(30.0_f32),
                 },
                 align_items: Some(AlignItems::Center),
                 gap: Size {
-                    width: length(8.0),
-                    height: length(0.0),
+                    width: length(8.0_f32),
+                    height: length(0.0_f32),
                 },
                 ..Default::default()
             })
@@ -781,8 +781,8 @@ pub(crate) fn build_list_panel(model: &Model, mod_idx: usize, lv: &ListView, the
         );
         let indicator = View::new(Style {
             size: Size {
-                width: length(140.0),
-                height: length(30.0),
+                width: length(140.0_f32),
+                height: length(30.0_f32),
             },
             align_items: Some(AlignItems::Center),
             justify_content: Some(JustifyContent::Center),
@@ -806,12 +806,12 @@ pub(crate) fn build_list_panel(model: &Model, mod_idx: usize, lv: &ListView, the
                 flex_direction: FlexDirection::Row,
                 size: Size {
                     width: percent(1.0_f32),
-                    height: length(38.0),
+                    height: length(38.0_f32),
                 },
                 align_items: Some(AlignItems::Center),
                 gap: Size {
-                    width: length(8.0),
-                    height: length(0.0),
+                    width: length(8.0_f32),
+                    height: length(0.0_f32),
                 },
                 ..Default::default()
             })
@@ -903,7 +903,7 @@ pub(crate) fn build_detail_panel(model: &Model, detail: &DetailState, theme: &Th
     let title = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: length(24.0),
+            height: length(24.0_f32),
         },
         flex_grow: 1.0,
         align_items: Some(AlignItems::Center),
@@ -942,12 +942,12 @@ pub(crate) fn build_detail_panel(model: &Model, detail: &DetailState, theme: &Th
         flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
-            height: length(34.0),
+            height: length(34.0_f32),
         },
         align_items: Some(AlignItems::Center),
         gap: Size {
-            width: length(10.0),
-            height: length(0.0),
+            width: length(10.0_f32),
+            height: length(0.0_f32),
         },
         ..Default::default()
     })
@@ -990,8 +990,8 @@ pub(crate) fn build_detail_panel(model: &Model, detail: &DetailState, theme: &Th
                 flex_direction: FlexDirection::Row,
                 align_items: Some(AlignItems::Center),
                 gap: Size {
-                    width: length(8.0),
-                    height: length(0.0),
+                    width: length(8.0_f32),
+                    height: length(0.0_f32),
                 },
                 ..Default::default()
             })
@@ -1034,7 +1034,7 @@ pub(crate) fn build_detail_panel(model: &Model, detail: &DetailState, theme: &Th
             vec![label, val]
         };
 
-        let height = if editing.is_some() { 34.0 } else { 26.0 };
+        let height: f32 = if editing.is_some() { 34.0 } else { 26.0 };
         children.push(
             View::new(Style {
                 flex_direction: FlexDirection::Row,
@@ -1044,8 +1044,8 @@ pub(crate) fn build_detail_panel(model: &Model, detail: &DetailState, theme: &Th
                 },
                 align_items: Some(AlignItems::Center),
                 gap: Size {
-                    width: length(12.0),
-                    height: length(0.0),
+                    width: length(12.0_f32),
+                    height: length(0.0_f32),
                 },
                 ..Default::default()
             })
@@ -1074,8 +1074,8 @@ pub(crate) fn build_detail_panel(model: &Model, detail: &DetailState, theme: &Th
                         height: auto(),
                     },
                     gap: Size {
-                        width: length(12.0),
-                        height: length(12.0),
+                        width: length(12.0_f32),
+                        height: length(12.0_f32),
                     },
                     ..Default::default()
                 })
@@ -1146,11 +1146,11 @@ pub(crate) fn build_related_list(
                 flex_direction: FlexDirection::Row,
                 size: Size {
                     width: percent(1.0_f32),
-                    height: length(20.0),
+                    height: length(20.0_f32),
                 },
                 gap: Size {
-                    width: length(8.0),
-                    height: length(0.0),
+                    width: length(8.0_f32),
+                    height: length(0.0_f32),
                 },
                 ..Default::default()
             })
@@ -1170,11 +1170,11 @@ pub(crate) fn build_related_list(
                     flex_direction: FlexDirection::Row,
                     size: Size {
                         width: percent(1.0_f32),
-                        height: length(22.0),
+                        height: length(22.0_f32),
                     },
                     gap: Size {
-                        width: length(8.0),
-                        height: length(0.0),
+                        width: length(8.0_f32),
+                        height: length(0.0_f32),
                     },
                     ..Default::default()
                 })
@@ -1192,14 +1192,14 @@ pub(crate) fn build_related_list(
         },
         flex_shrink: 0.0,
         margin: Rect {
-            left: length(0.0),
-            right: length(0.0),
-            top: length(10.0),
-            bottom: length(0.0),
+            left: length(0.0_f32),
+            right: length(0.0_f32),
+            top: length(10.0_f32),
+            bottom: length(0.0_f32),
         },
         gap: Size {
-            width: length(0.0),
-            height: length(4.0),
+            width: length(0.0_f32),
+            height: length(4.0_f32),
         },
         ..Default::default()
     })
@@ -1277,11 +1277,11 @@ pub(crate) fn build_form_panel(model: &Model, form: &FormState, theme: &Theme) -
         flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
-            height: length(38.0),
+            height: length(38.0_f32),
         },
         gap: Size {
-            width: length(10.0),
-            height: length(0.0),
+            width: length(10.0_f32),
+            height: length(0.0_f32),
         },
         ..Default::default()
     })
@@ -1466,7 +1466,7 @@ pub(crate) fn build_field_control(
             View::new(Style {
                 size: Size {
                     width: percent(1.0_f32),
-                    height: length(28.0),
+                    height: length(28.0_f32),
                 },
                 align_items: Some(AlignItems::Center),
                 ..Default::default()

@@ -20,12 +20,12 @@ pub(crate) fn breakdown_row(
         flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
-            height: length(18.0),
+            height: length(18.0_f32),
         },
         align_items: Some(AlignItems::Center),
         gap: Size {
-            width: length(6.0),
-            height: length(0.0),
+            width: length(6.0_f32),
+            height: length(0.0_f32),
         },
         ..Default::default()
     })
@@ -96,7 +96,7 @@ pub(crate) fn pie_canvas(slices: Vec<(f64, Color)>, donut: bool, gap: Color) -> 
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: length(128.0),
+            height: length(128.0_f32),
         },
         flex_shrink: 0.0,
         ..Default::default()
@@ -171,7 +171,7 @@ pub(crate) fn plot_canvas(series: Vec<(f64, Color)>, line: bool, axis: Color, ac
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: length(128.0),
+            height: length(128.0_f32),
         },
         flex_shrink: 0.0,
         ..Default::default()
@@ -263,7 +263,7 @@ pub(crate) fn multi_plot_canvas(
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: length(128.0),
+            height: length(128.0_f32),
         },
         flex_shrink: 0.0,
         ..Default::default()
@@ -384,8 +384,8 @@ pub(crate) fn legend_row(
 ) -> View<Msg> {
     let swatch = View::new(Style {
         size: Size {
-            width: length(12.0),
-            height: length(12.0),
+            width: length(12.0_f32),
+            height: length(12.0_f32),
         },
         flex_shrink: 0.0,
         ..Default::default()
@@ -396,12 +396,12 @@ pub(crate) fn legend_row(
         flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
-            height: length(18.0),
+            height: length(18.0_f32),
         },
         align_items: Some(AlignItems::Center),
         gap: Size {
-            width: length(6.0),
-            height: length(0.0),
+            width: length(6.0_f32),
+            height: length(0.0_f32),
         },
         ..Default::default()
     })

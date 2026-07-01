@@ -56,16 +56,16 @@ fn unit_card(model: &Model, u: &UnitObservation) -> View<Msg> {
         flex_direction: FlexDirection::Row,
         align_items: Some(AlignItems::Center),
         gap: Size {
-            width: length(8.0),
-            height: length(4.0),
+            width: length(8.0_f32),
+            height: length(4.0_f32),
         },
         ..Default::default()
     })
     .children(vec![
         View::new(Style {
             size: Size {
-                width: length(10.0),
-                height: length(10.0),
+                width: length(10.0_f32),
+                height: length(10.0_f32),
             },
             ..Default::default()
         })
@@ -92,8 +92,8 @@ fn unit_card(model: &Model, u: &UnitObservation) -> View<Msg> {
         flex_direction: FlexDirection::Row,
         align_items: Some(AlignItems::Center),
         gap: Size {
-            width: length(12.0),
-            height: length(4.0),
+            width: length(12.0_f32),
+            height: length(4.0_f32),
         },
         ..Default::default()
     })
@@ -119,12 +119,12 @@ fn unit_card(model: &Model, u: &UnitObservation) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Column,
         gap: Size {
-            width: length(8.0),
-            height: length(8.0),
+            width: length(8.0_f32),
+            height: length(8.0_f32),
         },
         padding: pad(13.0, 12.0),
         size: Size {
-            width: length(260.0),
+            width: length(260.0_f32),
             height: auto(),
         },
         ..Default::default()
@@ -145,8 +145,8 @@ fn actions_row(t: &llimphi_theme::Theme, id: Ulid) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Row,
         gap: Size {
-            width: length(8.0),
-            height: length(8.0),
+            width: length(8.0_f32),
+            height: length(8.0_f32),
         },
         ..Default::default()
     })

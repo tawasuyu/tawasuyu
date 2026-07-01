@@ -181,12 +181,12 @@ pub(crate) fn shell_view(model: &Model) -> View<Msg> {
     // que los dientes (overlay) no tapen las primeras columnas.
     let canvas_padded = View::new(Style {
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
-        min_size: Size { width: length(0.0), height: length(0.0) },
+        min_size: Size { width: length(0.0_f32), height: length(0.0_f32) },
         padding: Rect {
             left: length(SESSION_RAIL_W),
-            right: length(0.0),
-            top: length(0.0),
-            bottom: length(0.0),
+            right: length(0.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
         },
         ..Default::default()
     })
@@ -198,7 +198,7 @@ pub(crate) fn shell_view(model: &Model) -> View<Msg> {
     // de la ventana.
     let center_host = View::new(Style {
         flex_grow: 1.0,
-        min_size: Size { width: length(0.0), height: length(0.0) },
+        min_size: Size { width: length(0.0_f32), height: length(0.0_f32) },
         size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
@@ -260,7 +260,7 @@ pub(crate) fn shell_view(model: &Model) -> View<Msg> {
     );
     let body_wrap = View::new(Style {
         flex_grow: 1.0,
-        min_size: Size { width: length(0.0), height: length(0.0) },
+        min_size: Size { width: length(0.0_f32), height: length(0.0_f32) },
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
@@ -504,10 +504,10 @@ pub(crate) fn find_overlay_ex(
         flex_direction: FlexDirection::Column,
         align_items: Some(AlignItems::Center),
         padding: Rect {
-            left: length(0.0),
-            right: length(0.0),
+            left: length(0.0_f32),
+            right: length(0.0_f32),
             top: length(64.0_f32),
-            bottom: length(0.0),
+            bottom: length(0.0_f32),
         },
         ..Default::default()
     })
@@ -629,10 +629,10 @@ pub(crate) fn palette_overlay(
         flex_direction: FlexDirection::Column,
         align_items: Some(AlignItems::Center),
         padding: Rect {
-            left: length(0.0),
-            right: length(0.0),
+            left: length(0.0_f32),
+            right: length(0.0_f32),
             top: length(64.0_f32),
-            bottom: length(0.0),
+            bottom: length(0.0_f32),
         },
         ..Default::default()
     })
@@ -766,7 +766,7 @@ pub(crate) fn sidebar_view(model: &Model, theme: &Theme) -> View<Msg> {
     });
     let tree_wrap = View::new(Style {
         flex_grow: 1.0,
-        min_size: Size { width: length(0.0), height: length(0.0) },
+        min_size: Size { width: length(0.0_f32), height: length(0.0_f32) },
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
@@ -836,7 +836,7 @@ pub(crate) fn canvas_app_view(canvas: &CanvasApp, model: &Model, theme: &Theme) 
             );
             let cuerpo_wrap = View::new(Style {
                 flex_grow: 1.0,
-                min_size: Size { width: length(0.0), height: length(0.0) },
+                min_size: Size { width: length(0.0_f32), height: length(0.0_f32) },
                 size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
                 ..Default::default()
             })
@@ -998,7 +998,7 @@ pub(crate) fn queue_panel(model: &Model, theme: &Theme) -> Option<View<Msg>> {
 
     let header = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
-        padding: Rect { left: length(12.0), right: length(12.0), top: length(0.0), bottom: length(0.0) },
+        padding: Rect { left: length(12.0_f32), right: length(12.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
@@ -1026,7 +1026,7 @@ pub(crate) fn queue_panel(model: &Model, theme: &Theme) -> Option<View<Msg>> {
                 };
                 View::new(Style {
                     size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
-                    padding: Rect { left: length(16.0), right: length(12.0), top: length(0.0), bottom: length(0.0) },
+                    padding: Rect { left: length(16.0_f32), right: length(12.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
                     align_items: Some(AlignItems::Center),
                     ..Default::default()
                 })
@@ -1043,7 +1043,7 @@ pub(crate) fn queue_panel(model: &Model, theme: &Theme) -> Option<View<Msg>> {
         hijos.push(lista);
     }
 
-    let alto = if q.open { 172.0 } else { 30.0 };
+    let alto: f32 = if q.open { 172.0 } else { 30.0 };
     Some(
         View::new(Style {
             flex_direction: FlexDirection::Column,

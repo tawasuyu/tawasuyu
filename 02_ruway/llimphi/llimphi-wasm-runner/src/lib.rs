@@ -344,7 +344,7 @@ pub fn wire_to_view(
         let bar = View::new(Style {
             size: Size {
                 width: percent(frac),
-                height: percent(1.0),
+                height: percent(1.0_f32),
             },
             ..Default::default()
         })
@@ -429,15 +429,15 @@ pub fn wire_to_view(
 fn item_box(height: f32) -> View<RunnerMsg> {
     View::new(Style {
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: length(height),
         },
         align_items: Some(AlignItems::Center),
         padding: Rect {
-            left: length(10.0),
-            right: length(10.0),
-            top: length(0.0),
-            bottom: length(0.0),
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
         },
         ..Default::default()
     })

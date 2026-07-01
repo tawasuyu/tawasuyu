@@ -115,7 +115,7 @@ fn header_impl<Msg: Clone + 'static>(
         .children(vec![llimphi_icons::app_icons::app_icon_view(ic, 1.8)])])
     });
     // Con ícono, el título arranca más cerca (el ícono ya da el aire izquierdo).
-    let label_left = if icon.is_some() { 10.0 } else { 16.0 };
+    let label_left: f32 = if icon.is_some() { 10.0 } else { 16.0 };
     let label_view = View::new(Style {
         size: Size {
             width: percent(1.0_f32),

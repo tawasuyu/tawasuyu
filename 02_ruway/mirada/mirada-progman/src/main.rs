@@ -61,13 +61,13 @@ impl App for Progman {
     fn view(model: &AppRegistry) -> View<Msg> {
         // Barra de título azul marino — el sello de Win3.1.
         let titulo = View::new(Style {
-            size: Size { width: percent(1.0), height: length(24.0) },
+            size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
             align_items: Some(AlignItems::Center),
             padding: Rect {
-                left: length(8.0),
-                right: length(8.0),
-                top: length(0.0),
-                bottom: length(0.0),
+                left: length(8.0_f32),
+                right: length(8.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
             },
             flex_shrink: 0.0,
             ..Default::default()
@@ -81,14 +81,14 @@ impl App for Progman {
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::Wrap,
             align_content: Some(AlignContent::FlexStart),
-            gap: Size { width: length(12.0), height: length(12.0) },
+            gap: Size { width: length(12.0_f32), height: length(12.0_f32) },
             padding: Rect {
-                left: length(14.0),
-                right: length(14.0),
-                top: length(14.0),
-                bottom: length(14.0),
+                left: length(14.0_f32),
+                right: length(14.0_f32),
+                top: length(14.0_f32),
+                bottom: length(14.0_f32),
             },
-            size: Size { width: percent(1.0), height: auto() },
+            size: Size { width: percent(1.0_f32), height: auto() },
             flex_grow: 1.0,
             ..Default::default()
         })
@@ -98,7 +98,7 @@ impl App for Progman {
         // La «ventana»: marco gris con barra azul arriba.
         View::new(Style {
             flex_direction: FlexDirection::Column,
-            size: Size { width: percent(1.0), height: percent(1.0) },
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
             ..Default::default()
         })
         .fill(GRIS_OSCURO)
@@ -115,7 +115,7 @@ fn tile(e: &AppEntry) -> View<Msg> {
         .unwrap_or_else(|| e.label.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default());
 
     let icono = View::new(Style {
-        size: Size { width: length(48.0), height: length(48.0) },
+        size: Size { width: length(48.0_f32), height: length(48.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
@@ -123,7 +123,7 @@ fn tile(e: &AppEntry) -> View<Msg> {
     .text(glifo, 30.0, NEGRO);
 
     let etiqueta = View::new(Style {
-        size: Size { width: percent(1.0), height: auto() },
+        size: Size { width: percent(1.0_f32), height: auto() },
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
@@ -131,10 +131,10 @@ fn tile(e: &AppEntry) -> View<Msg> {
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: length(84.0), height: length(78.0) },
+        size: Size { width: length(84.0_f32), height: length(78.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
-        gap: Size { width: length(0.0), height: length(4.0) },
+        gap: Size { width: length(0.0_f32), height: length(4.0_f32) },
         ..Default::default()
     })
     .on_click(Msg::Launch(e.id.clone()))

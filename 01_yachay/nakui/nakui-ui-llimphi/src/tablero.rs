@@ -406,8 +406,8 @@ pub(crate) fn build_dashboard_panel(
         // altura de la card de gráfico que cae a su lado.
         align_items: Some(AlignItems::FlexStart),
         gap: Size {
-            width: length(12.0),
-            height: length(12.0),
+            width: length(12.0_f32),
+            height: length(12.0_f32),
         },
         ..Default::default()
     })
@@ -457,7 +457,7 @@ pub(crate) fn dashboard_card(
                 View::new(Style {
                     size: Size {
                         width: percent(1.0_f32),
-                        height: length(34.0),
+                        height: length(34.0_f32),
                     },
                     align_items: Some(AlignItems::Center),
                     ..Default::default()
@@ -602,20 +602,20 @@ pub(crate) fn dashboard_card(
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
-            width: length(220.0),
+            width: length(220.0_f32),
             height: auto(),
         },
         flex_grow: 0.0,
         flex_shrink: 0.0,
         padding: Rect {
-            left: length(14.0),
-            right: length(14.0),
-            top: length(12.0),
-            bottom: length(12.0),
+            left: length(14.0_f32),
+            right: length(14.0_f32),
+            top: length(12.0_f32),
+            bottom: length(12.0_f32),
         },
         gap: Size {
-            width: length(0.0),
-            height: length(6.0),
+            width: length(0.0_f32),
+            height: length(6.0_f32),
         },
         ..Default::default()
     })
@@ -706,8 +706,8 @@ pub(crate) fn build_report_panel(
                     height: auto(),
                 },
                 gap: Size {
-                    width: length(8.0),
-                    height: length(8.0),
+                    width: length(8.0_f32),
+                    height: length(8.0_f32),
                 },
                 ..Default::default()
             })

@@ -494,15 +494,15 @@ impl App for Uya {
 
         let rejilla = View::new(Style {
             size: Size {
-                width: percent(1.0),
+                width: percent(1.0_f32),
                 height: auto(),
             },
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::Wrap,
             flex_grow: 1.0,
             gap: Size {
-                width: length(12.0),
-                height: length(12.0),
+                width: length(12.0_f32),
+                height: length(12.0_f32),
             },
             padding: rect_all(12.0),
             ..Default::default()
@@ -513,7 +513,7 @@ impl App for Uya {
         // Zona superior: rejilla de caras (crece) + panel de charla (fijo).
         let superior = View::new(Style {
             size: Size {
-                width: percent(1.0),
+                width: percent(1.0_f32),
                 height: auto(),
             },
             flex_direction: FlexDirection::Row,
@@ -524,8 +524,8 @@ impl App for Uya {
 
         let raiz = View::new(Style {
             size: Size {
-                width: percent(1.0),
-                height: percent(1.0),
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
             },
             flex_direction: FlexDirection::Column,
             ..Default::default()
@@ -546,8 +546,8 @@ impl App for Uya {
         } else {
             View::new(Style {
                 size: Size {
-                    width: percent(1.0),
-                    height: percent(1.0),
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
                 },
                 ..Default::default()
             })
@@ -563,8 +563,8 @@ impl App for Uya {
 fn panel_charla(model: &Modelo) -> View<Msg> {
     let titulo = View::new(Style {
         size: Size {
-            width: percent(1.0),
-            height: length(26.0),
+            width: percent(1.0_f32),
+            height: length(26.0_f32),
         },
         ..Default::default()
     })
@@ -591,14 +591,14 @@ fn panel_charla(model: &Modelo) -> View<Msg> {
 
     let hilo = View::new(Style {
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: auto(),
         },
         flex_direction: FlexDirection::Column,
         flex_grow: 1.0,
         gap: Size {
-            width: length(0.0),
-            height: length(4.0),
+            width: length(0.0_f32),
+            height: length(4.0_f32),
         },
         ..Default::default()
     })
@@ -606,8 +606,8 @@ fn panel_charla(model: &Modelo) -> View<Msg> {
 
     let campo = View::new(Style {
         size: Size {
-            width: percent(1.0),
-            height: length(34.0),
+            width: percent(1.0_f32),
+            height: length(34.0_f32),
         },
         ..Default::default()
     })
@@ -621,13 +621,13 @@ fn panel_charla(model: &Modelo) -> View<Msg> {
 
     View::new(Style {
         size: Size {
-            width: length(280.0),
-            height: percent(1.0),
+            width: length(280.0_f32),
+            height: percent(1.0_f32),
         },
         flex_direction: FlexDirection::Column,
         gap: Size {
-            width: length(0.0),
-            height: length(8.0),
+            width: length(0.0_f32),
+            height: length(8.0_f32),
         },
         padding: rect_all(12.0),
         ..Default::default()
@@ -640,7 +640,7 @@ fn panel_charla(model: &Modelo) -> View<Msg> {
 fn linea_charla_view(texto: &str, color: Color) -> View<Msg> {
     View::new(Style {
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: auto(),
         },
         ..Default::default()
@@ -653,8 +653,8 @@ fn linea_charla_view(texto: &str, color: Color) -> View<Msg> {
 fn barra_conectar(model: &Modelo) -> View<Msg> {
     let mi = View::new(Style {
         size: Size {
-            width: percent(0.4),
-            height: percent(1.0),
+            width: percent(0.4_f32),
+            height: percent(1.0_f32),
         },
         align_items: Some(AlignItems::Center),
         ..Default::default()
@@ -675,7 +675,7 @@ fn barra_conectar(model: &Modelo) -> View<Msg> {
         flex_grow: 1.0,
         size: Size {
             width: auto(),
-            height: length(34.0),
+            height: length(34.0_f32),
         },
         ..Default::default()
     })
@@ -689,14 +689,14 @@ fn barra_conectar(model: &Modelo) -> View<Msg> {
 
     View::new(Style {
         size: Size {
-            width: percent(1.0),
-            height: length(50.0),
+            width: percent(1.0_f32),
+            height: length(50.0_f32),
         },
         flex_direction: FlexDirection::Row,
         align_items: Some(AlignItems::Center),
         gap: Size {
-            width: length(12.0),
-            height: length(0.0),
+            width: length(12.0_f32),
+            height: length(0.0_f32),
         },
         padding: rect_all(8.0),
         ..Default::default()
@@ -723,7 +723,7 @@ fn tile(
 ) -> View<Msg> {
     let estilo_video = Style {
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: auto(),
         },
         flex_grow: 1.0,
@@ -776,8 +776,8 @@ fn tile(
     };
     let label = View::new(Style {
         size: Size {
-            width: percent(1.0),
-            height: length(24.0),
+            width: percent(1.0_f32),
+            height: length(24.0_f32),
         },
         ..Default::default()
     })
@@ -793,13 +793,13 @@ fn tile(
 
     let mut vista = View::new(Style {
         size: Size {
-            width: length(300.0),
-            height: length(232.0),
+            width: length(300.0_f32),
+            height: length(232.0_f32),
         },
         flex_direction: FlexDirection::Column,
         gap: Size {
-            width: length(0.0),
-            height: length(6.0),
+            width: length(0.0_f32),
+            height: length(6.0_f32),
         },
         padding: rect_all(6.0),
         ..Default::default()
@@ -835,15 +835,15 @@ fn barra_controles(model: &Modelo) -> View<Msg> {
 
     View::new(Style {
         size: Size {
-            width: percent(1.0),
-            height: length(60.0),
+            width: percent(1.0_f32),
+            height: length(60.0_f32),
         },
         flex_direction: FlexDirection::Row,
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         gap: Size {
-            width: length(12.0),
-            height: length(0.0),
+            width: length(12.0_f32),
+            height: length(0.0_f32),
         },
         padding: rect_all(10.0),
         ..Default::default()
@@ -868,8 +868,8 @@ fn boton(label: &str, msg: Msg, activo: bool, peligro: bool) -> View<Msg> {
     };
     View::new(Style {
         size: Size {
-            width: length(160.0),
-            height: length(40.0),
+            width: length(160.0_f32),
+            height: length(40.0_f32),
         },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),

@@ -821,10 +821,10 @@ fn panel_gente(model: &Modelo) -> View<Msg> {
             flex_direction: FlexDirection::Row,
             gap: gap_h(6.0),
             margin: Rect {
-                left: length(0.0),
-                right: length(0.0),
-                top: length(4.0),
-                bottom: length(4.0),
+                left: length(0.0_f32),
+                right: length(0.0_f32),
+                top: length(4.0_f32),
+                bottom: length(4.0_f32),
             },
             ..Default::default()
         })
@@ -1137,10 +1137,10 @@ fn rotulo(texto: &str) -> View<Msg> {
             height: length(20.0_f32),
         },
         margin: Rect {
-            left: length(0.0),
-            right: length(0.0),
-            top: length(8.0),
-            bottom: length(0.0),
+            left: length(0.0_f32),
+            right: length(0.0_f32),
+            top: length(8.0_f32),
+            bottom: length(0.0_f32),
         },
         ..Default::default()
     })
@@ -1181,13 +1181,13 @@ fn lados(h: f32, v: f32) -> Rect<llimphi_ui::llimphi_layout::taffy::LengthPercen
 fn gap_h(x: f32) -> Size<llimphi_ui::llimphi_layout::taffy::LengthPercentage> {
     Size {
         width: length(x),
-        height: length(0.0),
+        height: length(0.0_f32),
     }
 }
 
 fn gap_v(y: f32) -> Size<llimphi_ui::llimphi_layout::taffy::LengthPercentage> {
     Size {
-        width: length(0.0),
+        width: length(0.0_f32),
         height: length(y),
     }
 }

@@ -215,8 +215,8 @@ where
     let toolbar = View::new(Style {
         flex_direction: FlexDirection::Row,
         gap: Size {
-            width: length(8.0),
-            height: length(8.0),
+            width: length(8.0_f32),
+            height: length(8.0_f32),
         },
         padding: uniform(8.0),
         flex_shrink: 0.0,
@@ -274,10 +274,10 @@ where
 {
     View::new(Style {
         padding: Rect {
-            left: length(12.0),
-            right: length(12.0),
-            top: length(6.0),
-            bottom: length(6.0),
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(6.0_f32),
+            bottom: length(6.0_f32),
         },
         flex_shrink: 0.0,
         ..Default::default()

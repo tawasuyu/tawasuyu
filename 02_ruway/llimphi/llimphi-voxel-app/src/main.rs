@@ -272,8 +272,8 @@ impl App for VoxelApp {
 fn root() -> Style {
     Style {
         size: Size {
-            width: percent(1.0),
-            height: percent(1.0),
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
         },
         ..Default::default()
     }
@@ -284,8 +284,8 @@ fn fill_absolute() -> Style {
     Style {
         position: Position::Absolute,
         size: Size {
-            width: percent(1.0),
-            height: percent(1.0),
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
         },
         ..Default::default()
     }

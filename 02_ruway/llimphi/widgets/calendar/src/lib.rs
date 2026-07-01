@@ -276,7 +276,7 @@ where
     };
     let title = format!("{} {}", month_name_es(view_month), view_year);
     let title_box = View::<Msg>::new(Style {
-        size: Size { width: percent(1.0), height: length(HEADER_H) },
+        size: Size { width: percent(1.0_f32), height: length(HEADER_H) },
         flex_grow: 1.0,
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
@@ -286,7 +286,7 @@ where
     let header = View::<Msg>::new(Style {
         flex_direction: FlexDirection::Row,
         align_items: Some(AlignItems::Center),
-        size: Size { width: percent(1.0), height: length(HEADER_H) },
+        size: Size { width: percent(1.0_f32), height: length(HEADER_H) },
         ..Default::default()
     })
     .children(vec![prev, title_box, next]);

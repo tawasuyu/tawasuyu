@@ -780,7 +780,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 }
 
 fn pad_h(v: f32) -> Rect<llimphi_ui::llimphi_layout::taffy::LengthPercentage> {
-    Rect { left: length(v), right: length(v), top: length(0.0), bottom: length(0.0) }
+    Rect { left: length(v), right: length(v), top: length(0.0_f32), bottom: length(0.0_f32) }
 }
 
 #[cfg(test)]

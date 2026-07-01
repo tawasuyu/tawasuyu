@@ -698,8 +698,8 @@ impl App for Studio {
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
-                width: percent(1.0),
-                height: percent(1.0),
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
             },
             ..Default::default()
         })
@@ -714,7 +714,7 @@ fn row_full() -> Style {
         flex_direction: FlexDirection::Row,
         flex_grow: 1.0,
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: Dimension::auto(),
         },
         ..Default::default()
@@ -732,8 +732,8 @@ fn top_bar(model: &Model) -> View<Msg> {
         };
         View::new(Style {
             size: Size {
-                width: length(120.0),
-                height: length(28.0),
+                width: length(120.0_f32),
+                height: length(28.0_f32),
             },
             align_items: Some(AlignItems::Center),
             padding: pad(12.0, 0.0),
@@ -747,8 +747,8 @@ fn top_bar(model: &Model) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
-            width: percent(1.0),
-            height: length(44.0),
+            width: percent(1.0_f32),
+            height: length(44.0_f32),
         },
         flex_shrink: 0.0,
         align_items: Some(AlignItems::Center),
@@ -837,7 +837,7 @@ fn input_row(i: usize, inp: &InputDef, theme: &Theme) -> View<Msg> {
             flex_grow: 1.0,
             size: Size {
                 width: Dimension::auto(),
-                height: length(24.0),
+                height: length(24.0_f32),
             },
             align_items: Some(AlignItems::Center),
             ..Default::default()
@@ -845,8 +845,8 @@ fn input_row(i: usize, inp: &InputDef, theme: &Theme) -> View<Msg> {
         .text(format!("{} · {}", inp.name, inp.kind.label()), 12.0, theme.fg_text),
         View::new(Style {
             size: Size {
-                width: length(30.0),
-                height: length(24.0),
+                width: length(30.0_f32),
+                height: length(24.0_f32),
             },
             flex_shrink: 0.0,
             ..Default::default()
@@ -936,7 +936,7 @@ fn graph_panel(model: &Model) -> View<Msg> {
         flex_direction: FlexDirection::Column,
         size: Size {
             width: Dimension::auto(),
-            height: percent(1.0),
+            height: percent(1.0_f32),
         },
         ..Default::default()
     })
@@ -1179,7 +1179,7 @@ fn cond_row(ci: usize, c: &CondDef, theme: &Theme) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: Dimension::auto(),
         },
         ..Default::default()
@@ -1203,8 +1203,8 @@ fn preview_canvas(model: &Model) -> View<Msg> {
 
     View::new(Style {
         size: Size {
-            width: percent(1.0),
-            height: length(220.0),
+            width: percent(1.0_f32),
+            height: length(220.0_f32),
         },
         ..Default::default()
     })
@@ -1457,7 +1457,7 @@ fn rig_canvas_panel(model: &Model) -> View<Msg> {
         flex_direction: FlexDirection::Column,
         size: Size {
             width: Dimension::auto(),
-            height: percent(1.0),
+            height: percent(1.0_f32),
         },
         padding: pad(14.0, 14.0),
         ..Default::default()
@@ -1551,8 +1551,8 @@ fn rig_canvas(model: &Model) -> View<Msg> {
     View::new(Style {
         flex_grow: 1.0,
         size: Size {
-            width: percent(1.0),
-            height: percent(1.0),
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
         },
         ..Default::default()
     })
@@ -1633,7 +1633,7 @@ fn theme_with_alpha(c: Color, a: u8) -> Color {
 fn auto_h(h: f32) -> Style {
     Style {
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: if h > 0.0 { length(h) } else { Dimension::auto() },
         },
         align_items: Some(AlignItems::Center),
@@ -1644,7 +1644,7 @@ fn auto_h(h: f32) -> Style {
 fn spacer(h: f32) -> View<Msg> {
     View::new(Style {
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: length(h),
         },
         ..Default::default()
@@ -1654,8 +1654,8 @@ fn spacer(h: f32) -> View<Msg> {
 fn section_title(text: &str, theme: &Theme) -> View<Msg> {
     View::new(Style {
         size: Size {
-            width: percent(1.0),
-            height: length(20.0),
+            width: percent(1.0_f32),
+            height: length(20.0_f32),
         },
         ..Default::default()
     })
@@ -1665,7 +1665,7 @@ fn section_title(text: &str, theme: &Theme) -> View<Msg> {
 fn muted(text: &str, theme: &Theme) -> View<Msg> {
     View::new(Style {
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: Dimension::auto(),
         },
         ..Default::default()
@@ -1679,7 +1679,7 @@ fn grow_text(text: String, theme: &Theme) -> View<Msg> {
         flex_grow: 1.0,
         size: Size {
             width: Dimension::auto(),
-            height: length(26.0),
+            height: length(26.0_f32),
         },
         align_items: Some(AlignItems::Center),
         ..Default::default()
@@ -1698,7 +1698,7 @@ fn toggle_btn(label: &str, active: bool, msg: Msg, theme: &Theme) -> View<Msg> {
         flex_grow: 1.0,
         size: Size {
             width: Dimension::auto(),
-            height: length(28.0),
+            height: length(28.0_f32),
         },
         align_items: Some(AlignItems::Center),
         padding: pad(10.0, 0.0),
@@ -1714,7 +1714,7 @@ fn fixed_btn(label: &str, msg: Msg, btn: &ButtonPalette, w: f32) -> View<Msg> {
     View::new(Style {
         size: Size {
             width: length(w),
-            height: length(26.0),
+            height: length(26.0_f32),
         },
         flex_shrink: 0.0,
         ..Default::default()
@@ -1731,8 +1731,8 @@ fn selectable_row(label: &str, selected: bool, msg: Msg, theme: &Theme) -> View<
     let fg = if selected { theme.fg_text } else { theme.fg_muted };
     View::new(Style {
         size: Size {
-            width: percent(1.0),
-            height: length(26.0),
+            width: percent(1.0_f32),
+            height: length(26.0_f32),
         },
         align_items: Some(AlignItems::Center),
         padding: pad(8.0, 0.0),
@@ -1748,7 +1748,7 @@ fn row(children: Vec<View<Msg>>) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: Dimension::auto(),
         },
         gap: gap(6.0),
@@ -1765,7 +1765,7 @@ fn wrap_row(children: Vec<View<Msg>>) -> View<Msg> {
         flex_direction: FlexDirection::Row,
         flex_wrap: FlexWrap::Wrap,
         size: Size {
-            width: percent(1.0),
+            width: percent(1.0_f32),
             height: Dimension::auto(),
         },
         gap: gap(4.0),
@@ -1779,7 +1779,7 @@ fn panel_column(rows: Vec<View<Msg>>, width: f32, bg: Color) -> View<Msg> {
         flex_direction: FlexDirection::Column,
         size: Size {
             width: length(width),
-            height: percent(1.0),
+            height: percent(1.0_f32),
         },
         flex_shrink: 0.0,
         padding: pad(12.0, 12.0),

@@ -388,9 +388,9 @@ impl App for Hapiy {
 
         let toolbar = View::new(Style {
             flex_direction: FlexDirection::Row,
-            size: Size { width: percent(1.0), height: length(60.0) },
+            size: Size { width: percent(1.0_f32), height: length(60.0_f32) },
             align_items: Some(AlignItems::Center),
-            gap: Size { width: length(8.0), height: length(0.0) },
+            gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
             padding: pad(10.0),
             ..Default::default()
         })
@@ -402,7 +402,7 @@ impl App for Hapiy {
                 // El preview entra con pop-in (fade) cada vez que cambia la toma:
                 // `shot_gen` es la `key` estable de la captura/recorte actual.
                 let mut imagen = View::new(Style {
-                    size: Size { width: percent(1.0), height: percent(1.0) },
+                    size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
                     flex_grow: 1.0,
                     ..Default::default()
                 })
@@ -423,7 +423,7 @@ impl App for Hapiy {
                 }
                 View::new(Style {
                     position: Position::Relative,
-                    size: Size { width: percent(1.0), height: percent(1.0) },
+                    size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
                     flex_grow: 1.0,
                     ..Default::default()
                 })
@@ -435,7 +435,7 @@ impl App for Hapiy {
                 let pal = EmptyPalette::from_theme(&theme);
                 let empty_desc = t("hapiy-empty-desc");
                 View::new(Style {
-                    size: Size { width: percent(1.0), height: percent(1.0) },
+                    size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
                     flex_grow: 1.0,
                     align_items: Some(AlignItems::Center),
                     justify_content: Some(JustifyContent::Center),
@@ -456,7 +456,7 @@ impl App for Hapiy {
         let lienzo = lienzo.animated_enter_from(scene_key, motion::SLOW, Affine::translate((0.0, 24.0)));
 
         let status = View::new(Style {
-            size: Size { width: percent(1.0), height: length(36.0) },
+            size: Size { width: percent(1.0_f32), height: length(36.0_f32) },
             align_items: Some(AlignItems::Center),
             padding: pad(10.0),
             ..Default::default()
@@ -466,7 +466,7 @@ impl App for Hapiy {
 
         let root = View::new(Style {
             flex_direction: FlexDirection::Column,
-            size: Size { width: percent(1.0), height: percent(1.0) },
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
             ..Default::default()
         })
         .fill(BG)
@@ -479,7 +479,7 @@ impl App for Hapiy {
             root
         } else {
             View::new(Style {
-                size: Size { width: percent(1.0), height: percent(1.0) },
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
                 ..Default::default()
             })
             .children(vec![root, toast_stack_view(&alive, model.viewport, Msg::ToastExpire)])
@@ -551,7 +551,7 @@ fn marquee(a: (f32, f32), c: (f32, f32)) -> View<Msg> {
 
 fn boton(label: &str, fg: Color, bg: Color, msg: Msg) -> View<Msg> {
     View::new(Style {
-        size: Size { width: length(150.0), height: length(40.0) },
+        size: Size { width: length(150.0_f32), height: length(40.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()

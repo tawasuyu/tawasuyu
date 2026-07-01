@@ -116,7 +116,7 @@ where
 {
     let (iw, ih) = inner_size;
     View::<Msg>::new(Style {
-        size: Size { width: percent(1.0), height: percent(1.0) },
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
     .clip(true)
@@ -145,8 +145,8 @@ where
         let inner_wrap = View::<Msg>::new(Style {
             position: llimphi_ui::llimphi_layout::taffy::Position::Absolute,
             inset: llimphi_ui::llimphi_layout::taffy::Rect {
-                top: length(0.0),
-                left: length(0.0),
+                top: length(0.0_f32),
+                left: length(0.0_f32),
                 right: llimphi_ui::llimphi_layout::taffy::prelude::auto(),
                 bottom: llimphi_ui::llimphi_layout::taffy::prelude::auto(),
             },

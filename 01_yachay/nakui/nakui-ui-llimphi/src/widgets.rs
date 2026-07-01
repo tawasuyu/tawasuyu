@@ -39,11 +39,11 @@ pub(crate) fn chip_row(children: Vec<View<Msg>>) -> View<Msg> {
         flex_wrap: llimphi_ui::llimphi_layout::taffy::FlexWrap::Wrap,
         size: Size {
             width: percent(1.0_f32),
-            height: length(32.0),
+            height: length(32.0_f32),
         },
         gap: Size {
-            width: length(6.0),
-            height: length(6.0),
+            width: length(6.0_f32),
+            height: length(6.0_f32),
         },
         align_items: Some(AlignItems::Center),
         ..Default::default()
@@ -106,7 +106,7 @@ pub(crate) fn cell_text(content: String, width: f32, color: Color) -> View<Msg> 
     View::new(Style {
         size: Size {
             width: length(width),
-            height: length(24.0),
+            height: length(24.0_f32),
         },
         flex_shrink: 0.0,
         align_items: Some(AlignItems::Center),
@@ -120,7 +120,7 @@ pub(crate) fn cell_flex(content: String, color: Color) -> View<Msg> {
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: length(24.0),
+            height: length(24.0_f32),
         },
         flex_grow: 1.0,
         align_items: Some(AlignItems::Center),
@@ -134,14 +134,14 @@ pub(crate) fn btn_style(width: f32) -> Style {
     Style {
         size: Size {
             width: length(width),
-            height: length(30.0),
+            height: length(30.0_f32),
         },
         flex_shrink: 0.0,
         padding: Rect {
-            left: length(10.0),
-            right: length(10.0),
-            top: length(4.0),
-            bottom: length(4.0),
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(4.0_f32),
+            bottom: length(4.0_f32),
         },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
@@ -153,15 +153,15 @@ pub(crate) fn btn_style(width: f32) -> Style {
 pub(crate) fn btn_style_auto() -> Style {
     Style {
         size: Size {
-            width: length(140.0),
-            height: length(26.0),
+            width: length(140.0_f32),
+            height: length(26.0_f32),
         },
         flex_shrink: 0.0,
         padding: Rect {
-            left: length(8.0),
-            right: length(8.0),
-            top: length(2.0),
-            bottom: length(2.0),
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(2.0_f32),
+            bottom: length(2.0_f32),
         },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),

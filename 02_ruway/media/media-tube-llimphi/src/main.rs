@@ -587,7 +587,7 @@ impl App for MediaTube {
 
         // ----- Header: marca + conmutador de backend + búsqueda + estado -----
         let brand = View::new(Style {
-            size: Size { width: length(86.0), height: percent(1.0_f32) },
+            size: Size { width: length(86.0_f32), height: percent(1.0_f32) },
             align_items: Some(AlignItems::Center),
             ..Default::default()
         })
@@ -602,7 +602,7 @@ impl App for MediaTube {
                 (Color::from_rgba8(44, 50, 62, 255), Color::from_rgba8(190, 198, 210, 255))
             };
             View::new(Style {
-                size: Size { width: length(92.0), height: length(32.0) },
+                size: Size { width: length(92.0_f32), height: length(32.0_f32) },
                 align_items: Some(AlignItems::Center),
                 justify_content: Some(JustifyContent::Center),
                 flex_shrink: 0.0,
@@ -625,13 +625,13 @@ impl App for MediaTube {
         );
         let search_wrap = View::new(Style {
             flex_grow: 1.0,
-            size: Size { width: auto(), height: length(34.0) },
+            size: Size { width: auto(), height: length(34.0_f32) },
             ..Default::default()
         })
         .children(vec![search_box]);
 
         let status = View::new(Style {
-            size: Size { width: length(220.0), height: percent(1.0_f32) },
+            size: Size { width: length(220.0_f32), height: percent(1.0_f32) },
             align_items: Some(AlignItems::Center),
             justify_content: Some(JustifyContent::End),
             flex_shrink: 0.0,
@@ -645,7 +645,7 @@ impl App for MediaTube {
         if m.channel.is_some() {
             hdr.push(
                 View::new(Style {
-                    size: Size { width: length(74.0), height: length(32.0) },
+                    size: Size { width: length(74.0_f32), height: length(32.0_f32) },
                     align_items: Some(AlignItems::Center),
                     justify_content: Some(JustifyContent::Center),
                     flex_shrink: 0.0,
@@ -713,7 +713,7 @@ impl App for MediaTube {
                 let author = card.author.clone().unwrap_or_default();
                 let chip = match &card.channel_id {
                     Some(cid) if !cid.is_empty() && !author.is_empty() => View::new(Style {
-                        size: Size { width: length(THUMB_W), height: length(16.0) },
+                        size: Size { width: length(THUMB_W), height: length(16.0_f32) },
                         align_items: Some(AlignItems::Center),
                         justify_content: Some(JustifyContent::Center),
                         flex_shrink: 0.0,
@@ -725,7 +725,7 @@ impl App for MediaTube {
                     .ellipsis(1)
                     .on_click(Msg::OpenChannel { id: cid.clone(), name: author.clone() }),
                     _ => View::new(Style {
-                        size: Size { width: length(THUMB_W), height: length(16.0) },
+                        size: Size { width: length(THUMB_W), height: length(16.0_f32) },
                         ..Default::default()
                     }),
                 };
@@ -789,7 +789,7 @@ impl App for MediaTube {
         let body = View::new(Style {
             flex_grow: 1.0,
             size: Size { width: percent(1.0_f32), height: auto() },
-            min_size: Size { width: length(0.0), height: length(0.0) },
+            min_size: Size { width: length(0.0_f32), height: length(0.0_f32) },
             ..Default::default()
         })
         .fill(Color::from_rgba8(20, 23, 30, 255))

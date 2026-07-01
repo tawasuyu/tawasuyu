@@ -246,7 +246,7 @@ fn ticket_panel(model: &Model, theme: &Theme) -> View<Msg> {
             size: Size { width: percent(1.0_f32), height: length(44.0_f32) },
             align_items: Some(AlignItems::Center),
             justify_content: Some(JustifyContent::SpaceBetween),
-            margin: Rect { left: length(0.0), right: length(0.0), top: length(8.0), bottom: length(0.0) },
+            margin: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(8.0_f32), bottom: length(0.0_f32) },
             ..Default::default()
         })
         .children(vec![

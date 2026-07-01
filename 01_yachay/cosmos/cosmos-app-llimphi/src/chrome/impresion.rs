@@ -175,17 +175,17 @@ pub(crate) fn print_viewport_h(model: &Model) -> f32 {
 pub(crate) fn print_view(model: &Model, theme: &Theme) -> View<Msg> {
     let btn = View::new(Style {
         size: Size {
-            width: length(190.0),
-            height: length(30.0),
+            width: length(190.0_f32),
+            height: length(30.0_f32),
         },
         flex_shrink: 0.0,
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         margin: Rect {
-            left: length(0.0),
-            right: length(0.0),
-            top: length(0.0),
-            bottom: length(10.0),
+            left: length(0.0_f32),
+            right: length(0.0_f32),
+            top: length(0.0_f32),
+            bottom: length(10.0_f32),
         },
         ..Default::default()
     })
@@ -241,10 +241,10 @@ pub(crate) fn print_view(model: &Model, theme: &Theme) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Start),
         padding: Rect {
-            left: length(8.0),
-            right: length(8.0),
-            top: length(12.0),
-            bottom: length(8.0),
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(12.0_f32),
+            bottom: length(8.0_f32),
         },
         ..Default::default()
     })
