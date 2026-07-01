@@ -640,12 +640,18 @@ impl LayerApp {
         self.pending_ws = pending;
         ctx.active_workspace = active;
         self.maybe_recargar_config();
-        // El toggle GLOBAL «dientes fuera» (WawaConfig) cambia si los rails
-        // reservan franja o flotan → hay que reanclar. Re-exec al detectarlo.
-        let dientes = wawa_config::WawaConfig::load().dientes_outside;
-        if dientes != self.dientes_outside {
-            self.dientes_outside = dientes;
-            self.re_exec_pata("cambió «dientes fuera del área de trabajo»");
+        // Los toggles GLOBALes de sidebar (WawaConfig) cambian el anclaje de los
+        // rails → hay que reanclar. Re-exec al detectar cambio en cualquiera de los
+        // dos ejes: `dientes_outside` (posición del rail) o `sidebar_docked`
+        // (reserva de franja / exclusive_zone).
+        let wcfg = wawa_config::WawaConfig::load();
+        if wcfg.dientes_outside != self.dientes_outside {
+            self.dientes_outside = wcfg.dientes_outside;
+            self.re_exec_pata("cambió la posición del rail (dientes adentro/afuera)");
+        }
+        if wcfg.sidebar_docked != self.sidebar_docked {
+            self.sidebar_docked = wcfg.sidebar_docked;
+            self.re_exec_pata("cambió el docked del sidebar (reserva de franja)");
         }
         self.ctx = ctx;
         if crate::push_clip_history(&mut self.clip_history, &clipboard) {

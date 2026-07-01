@@ -80,8 +80,9 @@ fn main() -> ExitCode {
     };
 
     let (sw, sh) = screen;
-    // Volcado de diagnóstico: dientes pegados al borde interno (default global).
-    let frame = pata_config::resolve(&cfg, Rect::new(0, 0, sw, sh), false);
+    // Volcado de diagnóstico con el default de `sidebar_docked` (true = los
+    // sidebars reservan su franja). El eje POSICIÓN del rail no entra en resolve.
+    let frame = pata_config::resolve(&cfg, Rect::new(0, 0, sw, sh), true);
 
     println!("pantalla: {sw}×{sh}   ·   zona horaria: {}", cfg.general.timezone);
     println!("superficies: {}", cfg.surfaces.len());

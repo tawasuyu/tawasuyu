@@ -221,8 +221,9 @@ impl From<WireSurface> for Surface {
             anchor: s.anchor,
             thickness: s.thickness,
             autohide: s.autohide,
-            // El wire (wawa) no transporta el override de reserva todavía.
+            // El wire (wawa) no transporta los overrides de docked/posición todavía.
             reserve: None,
+            rail_outside: None,
             padding: s.padding,
             gap: s.gap,
             opacity: s.opacity,

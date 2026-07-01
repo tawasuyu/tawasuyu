@@ -327,13 +327,21 @@ pub struct WawaConfig {
     #[serde(default = "default_modules")]
     pub modules: BTreeMap<String, bool>,
 
-    /// **Decisión global** de dónde van los rails de dientes (sidebars
-    /// acoplables) respecto al área de trabajo: `false` (default) = DENTRO
-    /// (overlay pegado al borde interno, como cosmos); `true` = FUERA (reservan
-    /// su franja, achicando el contenido). TODAS las apps con dientes deben
-    /// regirse por esto — una sola fuente de verdad, no por app.
+    /// **Eje 1 — POSICIÓN del rail de dientes** (sidebars acoplables), puramente
+    /// VISUAL: `false` (default) = DENTRO (overlay pegado al borde interno del
+    /// panel, como cosmos); `true` = FUERA (el rail sobresale como una franja
+    /// propia al costado del panel). NO decide si se reserva espacio del desktop
+    /// —eso es [`Self::sidebar_docked`], un eje independiente—. Override
+    /// por-sidebar: `Surface::rail_outside`.
     #[serde(default)]
     pub dientes_outside: bool,
+
+    /// **Eje 2 — DOCKED del sidebar** (independiente de la posición del rail):
+    /// `true` (default) = el sidebar RESERVA su franja del escritorio (las
+    /// ventanas la respetan, `exclusive_zone`); `false` = flota como overlay
+    /// encima del contenido sin reservar. Override por-sidebar: `Surface::reserve`.
+    #[serde(default = "default_sidebar_docked")]
+    pub sidebar_docked: bool,
 
     /// Proveedor de **fondo automático** elegido en el panel: `"bing"` (foto del
     /// día), `"nasa"` (APOD), `"folder"` (carpeta local), `"solar"` (por hora).
@@ -349,6 +357,10 @@ pub struct WawaConfig {
     /// búsqueda semántica apagada. Lo edita wawa-panel; lo leen shuma, paloma, …
     #[serde(default)]
     pub ai: AiConfig,
+}
+
+fn default_sidebar_docked() -> bool {
+    true
 }
 
 fn default_wallpaper_hours() -> u32 {
@@ -383,6 +395,7 @@ impl Default for WawaConfig {
             timefmt_24h: default_timefmt(),
             modules: default_modules(),
             dientes_outside: false,
+            sidebar_docked: default_sidebar_docked(),
             wallpaper_provider: String::new(),
             wallpaper_interval_hours: default_wallpaper_hours(),
             ai: AiConfig::default(),

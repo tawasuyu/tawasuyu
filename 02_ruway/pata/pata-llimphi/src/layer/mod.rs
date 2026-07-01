@@ -350,8 +350,12 @@ pub(super) struct LayerApp {
     pub(super) shuma_panel: Option<usize>,
     /// Grosor original (px) de esa barra.
     pub(super) shuma_bar_px: u32,
-    /// Último valor visto de `WawaConfig.dientes_outside`; si cambia, re-exec.
+    /// Último valor visto de `WawaConfig.dientes_outside` (posición del rail); si
+    /// cambia, re-exec.
     pub(super) dientes_outside: bool,
+    /// Último valor visto de `WawaConfig.sidebar_docked` (reserva de franja); si
+    /// cambia, re-exec (cambia el `exclusive_zone` de los sidebars).
+    pub(super) sidebar_docked: bool,
     /// Registro de apps para el menú de inicio.
     pub(super) registry: app_bus::AppRegistry,
     /// `true` cuando el drawer de la barra del menú está desplegado.
@@ -654,10 +658,13 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         };
 
     let utc = crate::usa_utc(&cfg);
-    // Decisión GLOBAL (WawaConfig): los rails de dientes reservan franja («fuera»
-    // del área) o flotan como overlay («dentro»). La leemos una vez; si cambia en
+    // Decisiones GLOBALes (WawaConfig), dos ejes independientes: `dientes_outside`
+    // = POSICIÓN del rail (visual, adentro/afuera); `sidebar_docked` = si el
+    // sidebar RESERVA franja (`exclusive_zone`). Las leemos una vez; si cambian en
     // runtime, `maybe_sample` re-ejecuta pata para reanclar.
-    let dientes_outside = wawa_config::WawaConfig::load().dientes_outside;
+    let wcfg = wawa_config::WawaConfig::load();
+    let dientes_outside = wcfg.dientes_outside;
+    let sidebar_docked = wcfg.sidebar_docked;
     let mut app = LayerApp {
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
@@ -723,6 +730,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         shuma_panel: None,
         shuma_bar_px: 40,
         dientes_outside,
+        sidebar_docked,
         registry: app_bus::AppRegistry::discover_merged(),
         menu_open: false,
         menu_opened_at: None,
@@ -857,13 +865,12 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             );
             layer.set_anchor(sctk_anchor);
             layer.set_size(size.0, size.1);
-            // Reserva franja si la superficie está «supeditada al desktop» y no es
-            // autohide; si no, flota como overlay. El override por-superficie
-            // `reserve` pisa la decisión global `dientes_outside` — igual que el
-            // path winit en `pata_core::layout::resolve`. Sin esto el sidebar
-            // derecho (`reserve = Some(true)`) flotaba sobre las ventanas.
-            let outside = s.reserve.unwrap_or(dientes_outside);
-            let excl = if outside && !s.autohide { thickness as i32 } else { 0 };
+            // Reserva franja si el sidebar está DOCKED (`reserve` por-superficie
+            // pisa el global `sidebar_docked`) y no es autohide; si no, flota como
+            // overlay. Es el eje independiente de la posición del rail — mismo
+            // criterio que `pata_core::layout::resolve`.
+            let docked = s.reserve.unwrap_or(sidebar_docked);
+            let excl = if docked && !s.autohide { thickness as i32 } else { 0 };
             layer.set_exclusive_zone(excl);
             layer.set_keyboard_interactivity(KeyboardInteractivity::None);
             layer.commit();

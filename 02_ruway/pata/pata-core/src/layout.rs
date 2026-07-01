@@ -100,7 +100,7 @@ fn shrink(area: Rect, anchor: Anchor, t: i32) -> Rect {
 /// Resuelve el marco sobre una pantalla. Recorre las superficies en orden: las
 /// barras sólidas se apilan reservando franja (la segunda barra del mismo borde
 /// va pegada a la primera); las `autohide`, docks y paneles flotan sin reservar.
-pub fn resolve(config: &Config, screen: Rect, dientes_outside: bool) -> Frame {
+pub fn resolve(config: &Config, screen: Rect, docked_default: bool) -> Frame {
     let mut work = screen;
     let mut surfaces = Vec::with_capacity(config.surfaces.len());
 
@@ -121,17 +121,16 @@ pub fn resolve(config: &Config, screen: Rect, dientes_outside: bool) -> Frame {
                     (r, true)
                 }
             }
-            // El rail de dientes: reserva franja («fuera» del área) o flota como
-            // overlay sobre ella («dentro»), según la decisión GLOBAL
-            // `dientes_outside` (WawaConfig) — la misma para TODAS las apps. El
-            // panel que despliega un diente flota aparte (lo maneja el frontend).
+            // El sidebar reserva franja si está DOCKED (eje independiente de la
+            // posición del rail): `reserve` por-superficie pisa el global
+            // `sidebar_docked` (pasado acá como `docked_default`). La POSICIÓN del
+            // rail (adentro/afuera, `dientes_outside`/`rail_outside`) es puramente
+            // visual y NO entra en `resolve`. El panel que despliega un diente
+            // flota aparte (lo maneja el frontend).
             SurfaceKind::Sidebar => {
                 let r = strip(work, s.anchor, t);
-                // Override por-superficie (`reserve`) sobre la decisión global
-                // `dientes_outside`: así un sidebar puntual (el derecho) puede
-                // quedar «supeditado al desktop» (reserva) aunque el resto flote.
-                let outside = s.reserve.unwrap_or(dientes_outside);
-                if outside && !s.autohide {
+                let docked = s.reserve.unwrap_or(docked_default);
+                if docked && !s.autohide {
                     work = shrink(work, s.anchor, t);
                     (r, true)
                 } else {
@@ -198,16 +197,16 @@ mod tests {
     }
 
     #[test]
-    fn preset_default_reserva_top_y_ambos_rails() {
-        // Con `dientes_outside=false` (default global): la top reserva su franja;
-        // AMBOS rails reservan (su `reserve = Some(true)` pisa la global) → quedan
-        // supeditados al desktop, siempre visibles. El shell autohide no reserva.
+    fn preset_docked_default_reserva_top_y_ambos_rails() {
+        // Con `docked_default=true` (default global `sidebar_docked`): la top
+        // reserva su franja; AMBOS rails reservan (siguen el global, `reserve` es
+        // None) → supeditados al desktop, siempre visibles. Shell autohide no.
         let cfg = Config::preset();
-        let f = resolve(&cfg, pantalla(), false);
+        let f = resolve(&cfg, pantalla(), true);
         assert_eq!(f.surfaces.len(), 4);
         assert!(f.surfaces[0].reserva); // top reserva
-        assert!(f.surfaces[1].reserva); // rail izq «supeditado» → reserva
-        assert!(f.surfaces[2].reserva); // rail der «supeditado» → reserva
+        assert!(f.surfaces[1].reserva); // rail izq docked → reserva
+        assert!(f.surfaces[2].reserva); // rail der docked → reserva
         assert!(!f.surfaces[3].reserva); // shell autohide
         let wa = f.work_area;
         assert_eq!(wa.y, 44); // la top descuenta arriba
@@ -216,15 +215,18 @@ mod tests {
     }
 
     #[test]
-    fn dientes_outside_hace_que_el_rail_reserve() {
-        // La misma preset con la decisión global «fuera»: el rail izq SÍ reserva
-        // (44 a la izquierda) y el der también (44 a la derecha) → 88 en total.
+    fn preset_sin_docked_global_los_rails_flotan() {
+        // El fix del bug «nada cambió»: como el preset ya NO hardcodea
+        // `reserve = Some(true)`, con `docked_default=false` los rails NO reservan
+        // (flotan) — la decisión global ahora SÍ manda. La top (Bar) sigue
+        // reservando (no depende de este eje).
         let cfg = Config::preset();
-        let f = resolve(&cfg, pantalla(), true);
-        assert!(f.surfaces[1].reserva);
-        assert!(f.surfaces[2].reserva);
-        assert_eq!(f.work_area.x, 44);
-        assert_eq!(f.work_area.w, 1920 - 88);
+        let f = resolve(&cfg, pantalla(), false);
+        assert!(f.surfaces[0].reserva); // top: siempre reserva
+        assert!(!f.surfaces[1].reserva); // rail izq flota
+        assert!(!f.surfaces[2].reserva); // rail der flota
+        assert_eq!(f.work_area.x, 0); // ningún rail descuenta a los lados
+        assert_eq!(f.work_area.w, 1920);
     }
 
     #[test]

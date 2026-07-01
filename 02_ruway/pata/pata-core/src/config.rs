@@ -321,13 +321,21 @@ pub struct Surface {
     /// shell (`shuma_input`) vive típicamente en una barra inferior con esto.
     #[cfg_attr(feature = "serde", serde(default))]
     pub autohide: bool,
-    /// Para `kind = sidebar`: ¿reserva su franja del escritorio («supeditada al
-    /// desktop», las ventanas no la tapan) o flota como overlay encima? `None`
-    /// = sigue la decisión global `dientes_outside`; `Some(true)` = reserva
-    /// siempre; `Some(false)` = flota siempre. Permite tener UN sidebar
-    /// (p. ej. el derecho) acoplado al desktop sin tocar el resto.
+    /// **Eje DOCKED** (`kind = sidebar`): ¿reserva su franja del escritorio
+    /// («supeditada al desktop», las ventanas no la tapan, `exclusive_zone`) o
+    /// flota como overlay encima? `None` = sigue el global `sidebar_docked`;
+    /// `Some(true)` = reserva siempre; `Some(false)` = flota siempre. Es
+    /// INDEPENDIENTE de [`Self::rail_outside`] (posición del rail). Permite tener
+    /// UN sidebar (p. ej. el derecho) acoplado al desktop sin tocar el resto.
     #[cfg_attr(feature = "serde", serde(default))]
     pub reserve: Option<bool>,
+    /// **Eje POSICIÓN del rail** (`kind = sidebar`), puramente visual: `None` =
+    /// sigue el global `dientes_outside`; `Some(false)` = rail DENTRO (overlay
+    /// sobre el panel, estilo cosmos); `Some(true)` = rail FUERA (sobresale como
+    /// franja al costado del panel). No afecta la reserva de espacio (eso es
+    /// [`Self::reserve`] / `sidebar_docked`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub rail_outside: Option<bool>,
     /// Padding interno (px) entre el borde y el primer widget.
     #[cfg_attr(feature = "serde", serde(default = "default_padding"))]
     pub padding: f32,
@@ -414,6 +422,7 @@ impl Default for Surface {
             thickness: default_thickness(),
             autohide: false,
             reserve: None,
+            rail_outside: None,
             padding: default_padding(),
             gap: default_gap(),
             opacity: default_opacity(),
@@ -681,12 +690,12 @@ impl Config {
         // global de pestañas no aparecía hasta que el usuario lo escribiera
         // a mano en el TOML.
         let mut rail = Surface::sidebar(Anchor::Left);
-        // Ambos rails van «supeditados al desktop» (reservan su franja): así
-        // quedan SIEMPRE visibles junto a las ventanas en vez de flotar como
-        // overlay (donde el izquierdo quedaba tapado por las ventanas y «no se
-        // mostraba»). `reserve = Some(true)` pisa la decisión global
-        // `dientes_outside`. Para volverlos overlay basta `reserve = Some(false)`.
-        rail.reserve = Some(true);
+        // Docked y posición del rail quedan en `None`: siguen los globales
+        // (`sidebar_docked` default true = reservan franja → SIEMPRE visibles;
+        // `dientes_outside` default false = rail overlay). Antes el preset ponía
+        // `reserve = Some(true)` HARDCODEADO, que pisaba el global y por eso
+        // cambiar la config «no cambiaba nada». Los switches por-sidebar
+        // (`reserve` / `rail_outside`) o los globales ahora sí deciden.
         rail.tabs.push(SidebarTab::new(
             "monads",
             "Mónadas",
@@ -710,11 +719,9 @@ impl Config {
             WidgetSpec::new("rag").with("source", Prop::Str("willay".to_string())),
         ));
 
-        // Sidebar DERECHO «supeditado al desktop»: reserva su franja (las
-        // ventanas no lo tapan) gracias a `reserve = Some(true)`, sin tocar la
-        // decisión global `dientes_outside`. Rail de herramientas a la derecha.
+        // Sidebar DERECHO: docked/posición siguen los globales (como el izquierdo).
+        // Rail de herramientas a la derecha.
         let mut rrail = Surface::sidebar(Anchor::Right);
-        rrail.reserve = Some(true);
         // Ancho generoso: el monitor embebe los panels de CPU/RAM (≈320 px).
         rrail.panel_width = 340.0;
         // Monitor de sistema: CPU (promedio + cores) + RAM. Primer paso del control
@@ -1083,14 +1090,16 @@ mod tests {
         let rail = &cfg.surfaces[1];
         assert_eq!(rail.kind, SurfaceKind::Sidebar);
         assert_eq!(rail.anchor, Anchor::Left);
-        assert_eq!(rail.reserve, Some(true));
+        // Docked y posición siguen los globales (None), no hardcodeados.
+        assert_eq!(rail.reserve, None);
+        assert_eq!(rail.rail_outside, None);
         assert!(!rail.tabs.is_empty());
 
-        // Sidebar derecho «supeditado al desktop»: reserva su franja.
+        // Sidebar derecho: idem, sigue los globales.
         let rrail = &cfg.surfaces[2];
         assert_eq!(rrail.kind, SurfaceKind::Sidebar);
         assert_eq!(rrail.anchor, Anchor::Right);
-        assert_eq!(rrail.reserve, Some(true));
+        assert_eq!(rrail.reserve, None);
         assert!(!rrail.tabs.is_empty());
         // El sidebar derecho trae el monitor de sistema.
         assert!(rrail.tabs.iter().any(|t| t.content.kind == "monitor"));

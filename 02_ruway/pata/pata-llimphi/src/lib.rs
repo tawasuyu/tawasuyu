@@ -1136,11 +1136,13 @@ impl Model {
     /// reinicio—. Cubre el caso típico: reordenar el dock / editar la barra.
     fn recargar_config(&mut self) {
         let cfg = pata_config::load();
-        let dientes_outside = wawa_config::WawaConfig::load().dientes_outside;
+        // El área de trabajo se reserva según el eje DOCKED (`sidebar_docked`),
+        // no según la posición del rail (`dientes_outside`, que es visual).
+        let docked = wawa_config::WawaConfig::load().sidebar_docked;
         self.frame = pata_core::resolve(
             &cfg,
             Rect::new(0, 0, self.screen.0, self.screen.1),
-            dientes_outside,
+            docked,
         );
         self.surfaces = Self::construir_surfaces(&cfg);
         self.cards = Self::construir_cards(&cfg);
@@ -1383,8 +1385,8 @@ impl App for PataApp {
         // de eventos, cualquier otro (default "paloma") = el correo.
         let rag_src = rag_present.then(|| rag_source(&cfg)).unwrap_or_default();
         let screen = PANTALLA;
-        let dientes_outside = wawa_config::WawaConfig::load().dientes_outside;
-        let frame = pata_core::resolve(&cfg, Rect::new(0, 0, screen.0, screen.1), dientes_outside);
+        let docked = wawa_config::WawaConfig::load().sidebar_docked;
+        let frame = pata_core::resolve(&cfg, Rect::new(0, 0, screen.0, screen.1), docked);
         let (surfaces, shuma) = Model::construir(&cfg);
         let cards = Model::construir_cards(&cfg);
         let mut sampler = Sampler::with_utc(usa_utc(&cfg));
