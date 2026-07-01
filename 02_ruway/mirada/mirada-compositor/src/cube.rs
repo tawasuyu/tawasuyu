@@ -155,6 +155,21 @@ pub fn strip_tex(i: usize, n: usize) -> Affine {
     Affine { a: u1 - u0, b: 0.0, c: u0, d: 0.0, e: 1.0, f: 0.0 }
 }
 
+/// Como [`strip_tex`] pero **espejada en horizontal** (`u → 1-u`): la franja
+/// geométrica `[i/n, (i+1)/n]` muestrea la columna reflejada `[1-(i+1)/n,
+/// 1-i/n]`, de derecha a izquierda dentro de la franja. La usa la cara `Next`
+/// cuando `dir < 0`: ahí su arista compartida (geometría `u=0`) es la DERECHA de
+/// la textura, no la izquierda, así que sin espejar el escritorio entrante se ve
+/// invertido horizontalmente.
+pub fn strip_tex_flipped(i: usize, n: usize) -> Affine {
+    let n = n.max(1);
+    let u0 = i as f32 / n as f32;
+    let u1 = (i + 1) as f32 / n as f32;
+    // quad-u=0 → 1-u0 (arista izq. de la franja muestrea la textura reflejada);
+    // quad-u=1 → 1-u1. Pendiente negativa = reflejo.
+    Affine { a: u0 - u1, b: 0.0, c: 1.0 - u0, d: 0.0, e: 1.0, f: 0.0 }
+}
+
 /// Dibuja el cubo en el `frame` (un offscreen ya limpiado al color de fondo):
 /// las dos caras, cada una en `strips` franjas verticales, ordenadas painter
 /// (la más lejana primero). `tex_current`/`tex_next` son los dos escritorios
@@ -191,9 +206,18 @@ pub fn draw_cube(
         faces.swap(0, 1);
     }
     for (face, tex, _) in faces {
+        // La cara destino comparte una arista con la actual; con dir<0 esa arista
+        // es la DERECHA de la destino, así que su textura va espejada respecto del
+        // muestreo por-u (que asume u=0 = izquierda). Sin esto el escritorio que
+        // entra por la izquierda se ve invertido horizontalmente.
+        let flip = face == Face::Next && dir < 0.0;
         for i in 0..strips.max(1) {
             let dst = mat3(&strip_dst(face, i, strips, phi, dir, wf, hf));
-            let texm = mat3(&strip_tex(i, strips));
+            let texm = mat3(&if flip {
+                strip_tex_flipped(i, strips)
+            } else {
+                strip_tex(i, strips)
+            });
             frame.render_texture(tex, texm, dst, None::<[f32; 0]>, 1.0, None, &[])?;
         }
     }
@@ -256,6 +280,24 @@ mod tests {
         assert!(
             center_depth(Face::Next, FRAC_PI_2, 1.0) > center_depth(Face::Current, FRAC_PI_2, 1.0)
         );
+    }
+
+    #[test]
+    fn strip_tex_flipped_es_el_reflejo_horizontal_del_normal() {
+        let n = 4;
+        // Franja 0 (izquierda geométrica) muestrea la DERECHA de la textura.
+        let f0 = strip_tex_flipped(0, n);
+        assert!(close(f0.apply(0.0, 0.0).0, 1.0), "franja izq quad-u=0 → textura derecha");
+        assert!(close(f0.apply(1.0, 0.0).0, 0.75), "→ 0.75");
+        // Franja n-1 (derecha geométrica) muestrea la IZQUIERDA de la textura.
+        let fl = strip_tex_flipped(n - 1, n);
+        assert!(close(fl.apply(1.0, 0.0).0, 0.0), "franja der quad-u=1 → textura izquierda");
+        // `v` intacto (el espejo es sólo horizontal).
+        assert!(close(f0.apply(0.3, 0.7).1, 0.7));
+        // Reflejo exacto del normal: u_flip == 1 - u_normal en cualquier punto.
+        let normal = strip_tex(1, n);
+        let flip = strip_tex_flipped(1, n);
+        assert!(close(flip.apply(0.5, 0.0).0, 1.0 - normal.apply(0.5, 0.0).0), "reflejo exacto");
     }
 
     #[test]
