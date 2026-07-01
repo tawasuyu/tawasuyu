@@ -163,6 +163,38 @@ pub(crate) fn send_frames_popups(parent: &WlSurface, time: u32) {
     }
 }
 
+/// Recolecta las callbacks de `wp_presentation` de un árbol de superficies hacia
+/// `feedback`. El llamante ya filtró a superficies que ESTÁN en la salida de
+/// `feedback`, así que el closure de «salida de scan-out primaria» siempre reporta
+/// esa salida y todas se recolectan. No reclamamos zero-copy (flags vacías): es un
+/// hint de optimización, omitirlo es correcto.
+pub(crate) fn take_presentation_feedback_tree(
+    surface: &WlSurface,
+    feedback: &mut smithay::desktop::utils::OutputPresentationFeedback,
+) {
+    use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
+    let output = feedback.output();
+    smithay::desktop::utils::take_presentation_feedback_surface_tree(
+        surface,
+        feedback,
+        |_, _| output.clone(),
+        |_, _| wp_presentation_feedback::Kind::empty(),
+    );
+}
+
+/// Como [`take_presentation_feedback_tree`] pero para los popups (menús) colgados
+/// de `parent`, recursivo — mismo recorrido que [`send_frames_popups`].
+pub(crate) fn take_presentation_feedback_popups(
+    parent: &WlSurface,
+    feedback: &mut smithay::desktop::utils::OutputPresentationFeedback,
+) {
+    for (popup, _) in smithay::desktop::PopupManager::popups_for_surface(parent) {
+        let s = popup.wl_surface().clone();
+        take_presentation_feedback_tree(&s, feedback);
+        take_presentation_feedback_popups(&s, feedback);
+    }
+}
+
 /// Despacha los callbacks de frame de un árbol de superficies: avisa a
 /// cada cliente de que puede dibujar el siguiente cuadro.
 pub(crate) fn send_frames_surface_tree(surface: &WlSurface, time: u32) {

@@ -2882,6 +2882,71 @@ impl DrmState {
         }
     }
 
+    /// Construye el `OutputPresentationFeedback` (protocolo `wp_presentation`) de
+    /// la salida `idx`: recolecta las callbacks de feedback de las superficies que
+    /// se COMPONEN en esta salida (ventanas + sus popups, layers, cursor cliente),
+    /// con el mismo criterio con que `emit_windows`/`render_output` las pintan. Se
+    /// pasa como user-data a `queue_frame`; el VBlank lo devuelve por
+    /// `frame_submitted` y ahí se marca `presented` con el timestamp REAL del
+    /// page-flip. Sin esto, mpv no avanza su reloj de reproducción.
+    fn output_presentation_feedback(
+        &self,
+        idx: usize,
+        rect: Rect,
+    ) -> smithay::desktop::utils::OutputPresentationFeedback {
+        let output = self.outputs[idx].output.clone();
+        let mut feedback = smithay::desktop::utils::OutputPresentationFeedback::new(&output);
+
+        // Ventanas visibles de la sesión activa cuyo rect decorado intersecta esta
+        // salida — mismo filtro y geometría que `emit_windows`.
+        let tbh = self.app.decorations.titlebar_height;
+        let primary_h = self.outputs[Self::PRIMARY].rect.h;
+        for w in &self.app.windows {
+            if !w.visible || w.is_greeter || !self.app.session_visible(w) {
+                continue;
+            }
+            if !crate::buffer_render_sano(&w.surface) {
+                continue;
+            }
+            let tb = crate::titlebar_for(w, tbh);
+            let (gx, gy) = crate::render_loc(w, primary_h, tbh);
+            let (sw, sh) =
+                crate::surface_px_size(w).unwrap_or((w.size.0, (w.size.1 - tb).max(1)));
+            let (gxd, gyd, gwd, ghd) = (gx, gy - tb, sw, sh + tb);
+            if gxd + gwd <= rect.x
+                || gyd + ghd <= rect.y
+                || gxd >= rect.x + rect.w
+                || gyd >= rect.y + rect.h
+            {
+                continue;
+            }
+            crate::take_presentation_feedback_tree(&w.surface, &mut feedback);
+            crate::take_presentation_feedback_popups(&w.surface, &mut feedback);
+        }
+
+        // Layers (barras, fondos) de esta salida.
+        for layer in smithay::desktop::layer_map_for_output(&output).layers() {
+            crate::take_presentation_feedback_tree(layer.wl_surface(), &mut feedback);
+        }
+
+        // Cursor cliente, si el puntero cae sobre esta salida.
+        if let CursorImageStatus::Surface(surface) = &self.app.cursor_status {
+            if surface.alive() {
+                let (cx, cy) = self.app.pointer_loc;
+                let (cxi, cyi) = (cx.round() as i32, cy.round() as i32);
+                if cxi >= rect.x
+                    && cyi >= rect.y
+                    && cxi < rect.x + rect.w
+                    && cyi < rect.y + rect.h
+                {
+                    crate::take_presentation_feedback_tree(surface, &mut feedback);
+                }
+            }
+        }
+
+        feedback
+    }
+
     /// Captura las ventanas del escritorio `ws` a una **textura** `w×h` (una cara
     /// del cubo). Reusa la extracción de texturas del Prezi: la geometría de cada
     /// escritorio (incluido el NO activo) viene de [`overview_data`], y la
@@ -3235,6 +3300,11 @@ impl DrmState {
         );
         // Transición CRT (apagado/encendido «TV antigua»): sólo la salida primaria.
         let crt = if is_primary { self.app.crt } else { None };
+        // Feedback de presentación (`wp_presentation`) de esta salida — se toma
+        // ANTES del préstamo mutable de `outputs[idx]` (necesita `&self`), viaja
+        // con el `queue_frame` y el VBlank lo marca `presented`. Si el frame sale
+        // vacío (no se encola), su `Drop` marca las callbacks como descartadas.
+        let feedback = self.output_presentation_feedback(idx, rect);
         let ctx = &mut self.outputs[idx];
         // `render_frame` es genérico en el tipo de elemento, así que las ramas
         // (CRT / lupa / tal cual) devuelven tipos distintos; las colapsamos a
@@ -3302,7 +3372,7 @@ impl DrmState {
         match frame_result {
             Ok(is_empty) => {
                 if !is_empty {
-                    match ctx.compositor.queue_frame(()) {
+                    match ctx.compositor.queue_frame(feedback) {
                         Ok(()) => {
                             ctx.pending_flip = true;
                             let name = ctx.name.clone();

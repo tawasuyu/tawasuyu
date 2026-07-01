@@ -464,6 +464,11 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         // lo conduce el tick con el mismo reloj de ocio que la política interna.
         _idle_notify_state: idle_notify::IdleNotifyState::new(&dh),
         idle_notifs: Vec::new(),
+        // `wp_presentation`: sin gatear (el timing de present no expone contenido).
+        // `clk_id = 1` = CLOCK_MONOTONIC — DEBE coincidir con el reloj de los
+        // timestamps que `OutputPresentationFeedback::presented::<_, Monotonic>`
+        // manda en el VBlank; si no, smithay descarta el feedback.
+        _presentation_state: smithay::wayland::presentation::PresentationState::new::<App>(&dh, 1),
         seat,
         keyboard: None,
         kbd_layout: String::new(),

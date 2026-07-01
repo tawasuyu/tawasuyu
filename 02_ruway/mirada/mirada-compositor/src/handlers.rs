@@ -812,6 +812,11 @@ impl ForeignToplevelListHandler for App {
 }
 delegate_output!(App);
 
+// `wp_presentation` (presentation-time): el feedback de cuándo se presentó cada
+// buffer. No hay `Handler` que implementar — el estado va por el user-data del
+// `queue_frame` del backend DRM. Sin este global, mpv no avanza su reloj.
+smithay::delegate_presentation!(App);
+
 // `zwp_idle_inhibit`: un cliente (vídeo, llamada) inhibe la inactividad sobre su
 // superficie. Llevamos el set de superficies inhibidoras; la política de
 // inactividad lo consulta para no apagar/bloquear mientras hay multimedia.

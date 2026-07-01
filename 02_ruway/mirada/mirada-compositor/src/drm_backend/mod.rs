@@ -82,8 +82,16 @@ mod video_wallpaper;
 
 /// El `DrmCompositor` concreto para una salida (un solo GPU). Hay uno por
 /// cada conector activo en multi-monitor.
-type Compositor =
-    DrmCompositor<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, (), DrmDeviceFd>;
+// El user-data que viaja con cada `queue_frame` es el `OutputPresentationFeedback`
+// (protocolo `wp_presentation`): el VBlank lo devuelve por `frame_submitted` y ahí
+// se marca `presented` con el timestamp REAL del page-flip. Sin él, mpv (y todo
+// cliente con display-sync) no avanza su reloj de reproducción.
+type Compositor = DrmCompositor<
+    GbmAllocator<DrmDeviceFd>,
+    GbmFramebufferExporter<DrmDeviceFd>,
+    smithay::desktop::utils::OutputPresentationFeedback,
+    DrmDeviceFd,
+>;
 
 /// Una salida física activa: su conector + CRTC + `DrmCompositor` propio +
 /// el [`smithay::output::Output`] anunciado en Wayland + su posición en el
@@ -112,8 +120,8 @@ struct OutputCtx {
     /// esquina superior-izquierda en el espacio común; `(rect.w, rect.h)`
     /// es el tamaño nativo del modo.
     rect: Rect,
-    /// Refresco en mHz (lo guardamos para futura reconfiguración / hotplug).
-    #[allow(dead_code)]
+    /// Refresco en mHz — para reconfiguración/hotplug y para el intervalo de
+    /// refresco que `wp_presentation` reporta a los clientes en cada VBlank.
     refresh_mhz: i32,
     /// Wallpaper ya compuesto al tamaño de **esta** salida; `None` se rearma
     /// perezosamente en el próximo render.
@@ -1417,6 +1425,21 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         .map_err(|e| format!("DrmCompositor::new[{name}] falló: {e}"))?;
         timing_hito("mirada:drmcomp-new-listo");
 
+        // El `Output` smithay se crea ANTES del present inicial: `queue_frame`
+        // exige un `OutputPresentationFeedback` (aunque este primer frame sea vacío
+        // y aún no haya clientes Wayland que pidan feedback). Anunciar el global un
+        // paso antes es inocuo.
+        let refresh_mhz = mode.vrefresh() as i32 * 1000;
+        let smithay_out = crate::announce_output(
+            &display.handle(),
+            &name,
+            w as i32,
+            h as i32,
+            refresh_mhz,
+            scale_120,
+            transform,
+        );
+
         // Incremento 1 del crossfade limpio (SDD §Fase 2): present inmediato del
         // fondo común apenas existe el compositor —ANTES de armar Wayland y
         // lanzar el greeter—. Así el PRIMER scanout de mirada es un frame
@@ -1433,7 +1456,9 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             let rf = comp.render_frame::<_, _>(&mut renderer, &vacio, CLEAR_COLOR, FrameFlags::DEFAULT);
             timing_hito("mirada:present-render-listo");
             match rf {
-                Ok(res) if !res.is_empty => match comp.queue_frame(()) {
+                Ok(res) if !res.is_empty => match comp.queue_frame(
+                    smithay::desktop::utils::OutputPresentationFeedback::new(&smithay_out),
+                ) {
                     Ok(()) => {
                         timing_hito("mirada:present-flip-listo");
                         true
@@ -1451,16 +1476,6 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             }
         };
         timing_hito("mirada:present-inicial-listo");
-        let refresh_mhz = mode.vrefresh() as i32 * 1000;
-        let smithay_out = crate::announce_output(
-            &display.handle(),
-            &name,
-            w as i32,
-            h as i32,
-            refresh_mhz,
-            scale_120,
-            transform,
-        );
         // Brain: cada salida es un id incremental con su tamaño local. El id
         // (= índice inicial, ya en orden ordenado) es ESTABLE: lo guardamos en
         // el `OutputCtx` para direccionar reservas/geometría aunque luego se
@@ -1591,17 +1606,57 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     // posee. Si llega para un CRTC desconocido (no debería en estado estable)
     // se ignora silenciosamente.
     handle
-        .insert_source(drm_notifier, |event, _meta, state| match event {
+        .insert_source(drm_notifier, |event, meta, state| match event {
             DrmEvent::VBlank(crtc) => {
                 if let Some(idx) = state.output_index_by_crtc(crtc) {
                     let ctx = &mut state.outputs[idx];
-                    if let Err(e) = ctx.compositor.frame_submitted() {
-                        dlog!(
+                    ctx.pending_flip = false;
+                    match ctx.compositor.frame_submitted() {
+                        // El frame recién presentado trae de vuelta su
+                        // `OutputPresentationFeedback`: lo marcamos `presented`
+                        // para que mpv (y todo cliente con display-sync) sepa
+                        // CUÁNDO se scanó el buffer y avance su reloj.
+                        Ok(Some(mut feedback)) => {
+                            use smithay::backend::drm::DrmEventTime;
+                            use smithay::utils::{Clock, Monotonic, Time};
+                            use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
+                            // Timestamp del page-flip en CLOCK_MONOTONIC + secuencia
+                            // del kernel. Si el driver reporta realtime (o no manda
+                            // metadata), caemos al reloj monotónico de ahora: el
+                            // `clk_id` del global es MONOTONIC y un timestamp
+                            // realtime rompería el reloj del cliente.
+                            let (time, seq): (Time<Monotonic>, u64) = match meta.take() {
+                                Some(m) => {
+                                    let t = match m.time {
+                                        DrmEventTime::Monotonic(d) => Time::<Monotonic>::from(d),
+                                        DrmEventTime::Realtime(_) => Clock::<Monotonic>::new().now(),
+                                    };
+                                    (t, m.sequence as u64)
+                                }
+                                None => (Clock::<Monotonic>::new().now(), 0),
+                            };
+                            let refresh = if ctx.refresh_mhz > 0 {
+                                smithay::wayland::presentation::Refresh::fixed(
+                                    std::time::Duration::from_secs_f64(
+                                        1000.0 / ctx.refresh_mhz as f64,
+                                    ),
+                                )
+                            } else {
+                                smithay::wayland::presentation::Refresh::Unknown
+                            };
+                            feedback.presented::<_, Monotonic>(
+                                time,
+                                refresh,
+                                seq,
+                                wp_presentation_feedback::Kind::Vsync,
+                            );
+                        }
+                        Ok(None) => {}
+                        Err(e) => dlog!(
                             "mirada-compositor · frame_submitted[{}]: {e}",
                             ctx.name
-                        );
+                        ),
                     }
-                    ctx.pending_flip = false;
                 }
             }
             DrmEvent::Error(e) => dlog!("mirada-compositor · DRM: {e}"),

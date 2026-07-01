@@ -520,6 +520,11 @@ pub(crate) struct App {
     pub(crate) _idle_notify_state: idle_notify::IdleNotifyState,
     /// Notificaciones de ocio vivas, cada una con su propio timeout.
     pub(crate) idle_notifs: Vec<idle_notify::IdleNotif>,
+    /// Global `wp_presentation` (presentation-time). Sólo se conserva para
+    /// mantenerlo vivo toda la sesión: el feedback por-superficie viaja como
+    /// user-data del `queue_frame` del backend DRM y se marca `presented` en el
+    /// VBlank. Su `clk_id` es CLOCK_MONOTONIC. Ver [`crate::take_presentation_feedback_tree`].
+    pub(crate) _presentation_state: smithay::wayland::presentation::PresentationState,
     pub(crate) seat: Seat<App>,
     /// Estado del protocolo `wlr-layer-shell` (barras/fondos/overlays como
     /// waybar, swaybg, wofi, mako).

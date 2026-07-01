@@ -429,6 +429,39 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
         if let Err(e) = backend.submit(Some(&[damage])) {
             dlog!("mirada-compositor · submit winit falló ({e}); sigo al próximo frame.");
         }
+
+        // `wp_presentation` en anidado: no hay VBlank real (el compositor padre
+        // decide el present), así que marcamos `presented` con el reloj monotónico
+        // de AHORA — aproximación suficiente para que mpv (y todo cliente con
+        // display-sync) avance su reloj. Mismo conjunto de superficies que los
+        // frame-callbacks de arriba (sin el throttle: el buffer se presentó igual).
+        if let Some(output) = state.output.clone() {
+            use smithay::desktop::utils::OutputPresentationFeedback;
+            use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
+            use smithay::utils::{Clock, Monotonic};
+            let mut feedback = OutputPresentationFeedback::new(&output);
+            for w in &state.windows {
+                if w.suspended {
+                    continue;
+                }
+                if let Some(a) = activa {
+                    if !w.is_shell && !w.is_greeter && w.session != a {
+                        continue;
+                    }
+                }
+                crate::take_presentation_feedback_tree(&w.surface, &mut feedback);
+                crate::take_presentation_feedback_popups(&w.surface, &mut feedback);
+            }
+            for layer in layer_map_for_output(&output).layers() {
+                crate::take_presentation_feedback_tree(layer.wl_surface(), &mut feedback);
+            }
+            feedback.presented::<_, Monotonic>(
+                Clock::<Monotonic>::new().now(),
+                smithay::wayland::presentation::Refresh::Unknown,
+                0,
+                wp_presentation_feedback::Kind::Vsync,
+            );
+        }
     }
 
     // Sesión ajena pendiente (handoff por `exec`): en anidado no hay DRM
