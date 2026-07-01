@@ -330,6 +330,7 @@ enum Msg {
     CycleMatParent,
     AddMatLey,
     RemoveMatLey,
+    CycleMatLey(usize),
     // Seres.
     CycleSereAge,
     CycleSereCuerpo,
@@ -822,6 +823,21 @@ impl App for Studio {
             Msg::RemoveMatLey => {
                 if let Some(m) = sel_material_mut(&mut model) {
                     m.leyes.pop();
+                }
+            }
+            Msg::CycleMatLey(i) => {
+                // Cicla a qué ley del proyecto apunta la ley `i` del material (para
+                // poder señalar una ley Ecuacion y que corra sobre el material).
+                let ids: Vec<u64> = model.project.leyes.iter().map(|l| l.id).collect();
+                if !ids.is_empty() {
+                    if let Some(m) = sel_material_mut(&mut model) {
+                        if let Some(u) = m.leyes.get_mut(i) {
+                            let pos = ids.iter().position(|&id| id == u.ley).unwrap_or(0);
+                            u.ley = ids[(pos + 1) % ids.len()];
+                            u.params.clear();
+                        }
+                    }
+                    model.gen += 1;
                 }
             }
             Msg::CycleSereAge => {
@@ -2110,9 +2126,9 @@ fn material_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
         v
     } else {
         let mut v = vec![section_title("LEYES DEL MATERIAL", theme)];
-        for u in &m.leyes {
+        for (i, u) in m.leyes.iter().enumerate() {
             let name = model.project.ley(u.ley).map(|l| l.name.clone()).unwrap_or_else(|| "?".into());
-            v.push(body_text(format!("· {name}"), theme.fg_text, theme));
+            v.push(button_view(format!("· {name}  (cambiar)"), &btn, Msg::CycleMatLey(i)));
         }
         if m.leyes.is_empty() {
             v.push(body_text("sin leyes aplicadas".into(), theme.fg_placeholder, theme));
