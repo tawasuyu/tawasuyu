@@ -560,6 +560,28 @@ impl LayerApp {
         self.panels[pi].dirty = true;
     }
 
+    /// Aplica EN VIVO el eje docked de la surface `si`: cambia el `exclusive_zone`
+    /// de sus layer surfaces (reserva franja `thickness` si docked y no autohide;
+    /// `0` si flota) y re-renderiza. Sin re-exec — el compositor re-tesela las
+    /// ventanas al recibir el commit.
+    pub(super) fn aplicar_docked_sidebar(&mut self, si: usize, docked: bool) {
+        let (thickness, autohide) = match self.cfg.surfaces.get(si) {
+            Some(s) => (s.thickness.max(1.0) as i32, s.autohide),
+            None => return,
+        };
+        if let Some(s) = self.cfg.surfaces.get_mut(si) {
+            s.reserve = Some(docked);
+        }
+        let excl = if docked && !autohide { thickness } else { 0 };
+        for p in &self.panels {
+            if p.idx == si {
+                p.layer.set_exclusive_zone(excl);
+                p.layer.commit();
+            }
+        }
+        self.marcar_sidebars_dirty();
+    }
+
     /// Cierra el panel del sidebar (si alguno está abierto).
     pub(super) fn cerrar_sidebar(&mut self) {
         if let Some((si, ti)) = self.nav.open {
@@ -1794,15 +1816,19 @@ impl LayerApp {
                 }
             }
             Msg::NavTabActivate(si, ti) => self.set_sidebar_open(si, ti),
-            // Barrita del sidebar: persiste el eje por-sidebar y re-ejecuta pata
-            // para reanclar la layer surface con el nuevo docked/posición.
+            // Barrita del sidebar: se aplica EN VIVO (sin re-exec ni parpadeo).
+            // Docked = sólo cambia el `exclusive_zone` de la surface; posición del
+            // rail = puramente render. Ambos persisten en el TOML.
             Msg::SidebarSetDocked(si, docked) => {
                 crate::persistir_eje_sidebar(si, Some(docked), None);
-                self.re_exec_pata("cambió «docked» del sidebar (barrita)");
+                self.aplicar_docked_sidebar(si, docked);
             }
             Msg::SidebarSetRailOutside(si, outside) => {
                 crate::persistir_eje_sidebar(si, None, Some(outside));
-                self.re_exec_pata("cambió la posición del rail del sidebar (barrita)");
+                if let Some(s) = self.cfg.surfaces.get_mut(si) {
+                    s.rail_outside = Some(outside);
+                }
+                self.marcar_sidebars_dirty();
             }
             Msg::NavClosePanel => self.cerrar_sidebar(),
             Msg::NavSetMode(m) => {
