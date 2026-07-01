@@ -2473,6 +2473,19 @@ impl App {
             );
         }
         self.mode = BodyMode::Session;
+        // Cargá la config del USUARIO que acaba de loguear. El compositor corre
+        // como root: arrancó con la config de root (o el default) y su watcher
+        // vigila la ruta de root, así que sin esto los ajustes del usuario
+        // (`~/.config/mirada/config.ron`: modo de switch de workspaces —cube/
+        // prezi—, gaps, tema…) NUNCA se leían. Peor: los saves de cambios vivos
+        // volcaban la config de root sobre el archivo del usuario, pisándolo. Al
+        // traspasar re-leemos la suya para que mande de acá en más (y los saves
+        // subsiguientes queden consistentes con lo cargado).
+        if let Some(cfg_path) = crate::utilidades::config_path(Some(&ticket.user)) {
+            if cfg_path.exists() {
+                self.reload_config_from(&cfg_path);
+            }
+        }
         // Quién era la activa antes del alta — para el relevo de escritorio (FUS):
         // sus ventanas se retiran del `Desktop` al sumar la nueva. `None` en el
         // login de arranque (roster vacío).
