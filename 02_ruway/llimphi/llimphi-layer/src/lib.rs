@@ -495,7 +495,7 @@ impl<A: App> Runner<A> {
                     return;
                 }
             };
-            match RawSurface::from_surface(hal, wgpu_surface, w, h) {
+            match RawSurface::from_surface(hal, wgpu_surface, display_handle, window_handle, w, h) {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!("llimphi-layer · sin gpu: {e}");

@@ -256,7 +256,21 @@ impl Hal {
             device,
             queue,
         };
-        let surface = RawSurface::from_surface(&hal, wgpu_surface, width, height)?;
+        // Extraemos los raw handles del target para que la `RawSurface` pueda
+        // recrearse ante una pérdida (los `RawHandle` son `Copy`).
+        let (raw_display, raw_window) = match make_target() {
+            wgpu::SurfaceTargetUnsafe::RawHandle {
+                raw_display_handle,
+                raw_window_handle,
+            } => (raw_display_handle, raw_window_handle),
+            _ => {
+                return Err(HalError::CreateSurface(
+                    "new_for_raw_surface requiere SurfaceTargetUnsafe::RawHandle".into(),
+                ))
+            }
+        };
+        let surface =
+            RawSurface::from_surface(&hal, wgpu_surface, raw_display, raw_window, width, height)?;
         Ok((hal, surface))
     }
 }
@@ -374,13 +388,25 @@ pub struct RawSurface {
     overlay: wgpu::Texture,
     overlay_view: wgpu::TextureView,
     blitter: wgpu::util::TextureBlitter,
+    /// La instancia + los raw handles del `wl_surface`/`wl_display`, guardados para
+    /// **recrear** la `wgpu::Surface` cuando queda irrecuperable (ver
+    /// [`RawSurface::recreate`]). Los `RawHandle` son `Copy` y apuntan a objetos
+    /// que el caller mantiene vivos toda la vida de la `RawSurface`.
+    instance: wgpu::Instance,
+    raw_display: raw_window_handle::RawDisplayHandle,
+    raw_window: raw_window_handle::RawWindowHandle,
 }
 
 impl RawSurface {
-    /// Envuelve una `wgpu::Surface` ya creada, con el tamaño físico inicial.
+    /// Envuelve una `wgpu::Surface` ya creada, con el tamaño físico inicial. Los
+    /// `raw_display`/`raw_window` son los handles con que se creó la surface: se
+    /// guardan para poder RECREARLA si el compositor la invalida (Iris Xe), ya que
+    /// reconfigurar la misma surface no siempre recupera.
     pub fn from_surface(
         hal: &Hal,
         surface: wgpu::Surface<'static>,
+        raw_display: raw_window_handle::RawDisplayHandle,
+        raw_window: raw_window_handle::RawWindowHandle,
         width: u32,
         height: u32,
     ) -> Result<Self, HalError> {
@@ -454,11 +480,35 @@ impl RawSurface {
             overlay,
             overlay_view,
             blitter,
+            instance: hal.instance.clone(),
+            raw_display,
+            raw_window,
         })
     }
 
     pub fn format(&self) -> wgpu::TextureFormat {
         self.config.format
+    }
+
+    /// Recrea la `wgpu::Surface` desde el raw handle del `wl_surface` y la
+    /// reconfigura. Es la recuperación REAL cuando la surface quedó irrecuperable
+    /// —p. ej. `configure` falla con «Surface does not support the adapter's queue
+    /// family» tras un reset del compositor en Iris Xe—: reconfigurar la MISMA
+    /// surface no basta, hay que crear una nueva. Devuelve el error si falla (el
+    /// caller salta el frame y reintenta). Sin esto, la barra quedaba en un bucle
+    /// de «surface perdida» hasta que se caía la conexión (Broken pipe).
+    fn recreate(&mut self) -> Result<(), String> {
+        let target = wgpu::SurfaceTargetUnsafe::RawHandle {
+            raw_display_handle: self.raw_display,
+            raw_window_handle: self.raw_window,
+        };
+        // SAFETY: los handles apuntan a objetos Wayland que el caller mantiene
+        // vivos toda la vida de la `RawSurface` (mismo contrato que `from_surface`).
+        let surface = unsafe { self.instance.create_surface_unsafe(target) }
+            .map_err(|e| format!("create_surface_unsafe: {e}"))?;
+        configure_checked(&self.device, &surface, &self.config)?;
+        self.surface = surface;
+        Ok(())
     }
 }
 
@@ -481,7 +531,14 @@ impl Surface for RawSurface {
         self.config.width = w;
         self.config.height = h;
         if let Err(e) = configure_checked(&self.device, &self.surface, &self.config) {
-            eprintln!("llimphi-hal: configure en resize falló (surface perdida?): {e}");
+            // Igual que en `acquire`: si reconfigurar no recupera, recreamos la
+            // surface desde el raw handle antes de rendirnos.
+            match self.recreate() {
+                Ok(()) => eprintln!("llimphi-hal: surface RECREADA en resize (reconfigure falló: {e})"),
+                Err(e2) => {
+                    eprintln!("llimphi-hal: configure en resize falló ({e}); recrear también falló ({e2})")
+                }
+            }
         }
         let (tex, view) = create_intermediate(&self.device, self.config.width, self.config.height);
         self.intermediate = tex;
@@ -505,8 +562,19 @@ impl Surface for RawSurface {
                 // mataría el proceso (era el crash de pata). Acá lo devolvemos
                 // como `Lost` y el caller salta el frame e intenta de nuevo.
                 if let Err(msg) = configure_checked(&self.device, &self.surface, &self.config) {
-                    eprintln!("llimphi-hal: reconfigurar tras {e:?} falló (surface perdida): {msg}");
-                    return Err(SurfaceError::Lost);
+                    // Reconfigurar no recuperó (surface realmente perdida): RECREAR
+                    // desde el raw handle. Si eso también falla, saltamos el frame.
+                    match self.recreate() {
+                        Ok(()) => eprintln!(
+                            "llimphi-hal: surface RECREADA tras {e:?} (reconfigure falló: {msg})"
+                        ),
+                        Err(msg2) => {
+                            eprintln!(
+                                "llimphi-hal: reconfigurar tras {e:?} falló ({msg}); recrear también falló ({msg2})"
+                            );
+                            return Err(SurfaceError::Lost);
+                        }
+                    }
                 }
                 self.surface.get_current_texture().map_err(|_| match e {
                     wgpu::SurfaceError::Lost => SurfaceError::Lost,
