@@ -690,6 +690,42 @@
     }
 
     #[test]
+    fn trim_recorta_la_mascara_de_seleccion_a_las_nuevas_dims() {
+        // Lienzo 4×4 con contenido opaco sólo en (1,1)..(3,3) → el trim recorta
+        // a ese 2×2 con offset (1,1). Una selección por máscara debe quedar del
+        // nuevo tamaño (2×2), no de 4×4 (antes se descartaba por tamaño).
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        let mut buf = vec![0u8; 4 * 4 * 4];
+        for y in 1..3 {
+            for x in 1..3 {
+                let i = (y * 4 + x) * 4;
+                buf[i..i + 4].copy_from_slice(&[200, 100, 50, 255]);
+            }
+        }
+        let hash = model.almacen.insertar(buf);
+        model.lienzo.capa_mut(id).unwrap().contenido = hash;
+        aplicar_y_recomponer(&mut model);
+        // Máscara 4×4 que marca (1,1) y (2,2) (dentro del área que sobrevive).
+        let mut mask = vec![0u8; 16];
+        mask[1 * 4 + 1] = 255;
+        mask[2 * 4 + 2] = 255;
+        let mh = model.almacen.insertar(mask);
+        model.seleccion_mascara = Some(mh);
+        model.seleccion = Some(RectImagen { x0: 1, y0: 1, x1: 3, y1: 3 });
+
+        assert!(recortar_lienzo_a_visible(&mut model));
+        assert_eq!((model.lienzo.width, model.lienzo.height), (2, 2), "recortado a 2×2");
+        // La cobertura ahora existe (tamaño correcto) y conserva la forma:
+        // (1,1)→(0,0) y (2,2)→(1,1) en el nuevo espacio.
+        let cov = cobertura_seleccion(&model).expect("máscara recortada, no descartada");
+        assert_eq!(cov.len(), 4, "cobertura del nuevo tamaño 2×2");
+        assert_eq!(cov[0], 255, "(1,1)→(0,0) sigue marcado");
+        assert_eq!(cov[1 * 2 + 1], 255, "(2,2)→(1,1) sigue marcado");
+        assert_eq!(cov[1], 0, "(2,1)→(1,0) no marcado — forma conservada");
+    }
+
+    #[test]
     fn mover_con_mascara_irregular_conserva_la_forma() {
         // Lienzo 4×4. Máscara diagonal: sólo (0,0) y (1,1). Los píxeles NO
         // seleccionados dentro del bbox (1,0)/(0,1) deben quedarse quietos —

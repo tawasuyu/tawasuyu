@@ -583,6 +583,32 @@ pub(crate) fn recortar_lienzo_a(model: &mut Model, x0: u32, y0: u32, x1: u32, y1
     }
     model.lienzo.width = new_w;
     model.lienzo.height = new_h;
+    // La selección (máscara irregular + rect) acompaña el recorte igual que las
+    // máscaras de capa: si no, quedaría con las dims viejas y el overlay se
+    // pintaría corrido / la cobertura se descartaría por tamaño. (crop-a-
+    // selección la limpia después a propósito; el trim la conserva recortada.)
+    if let Some(hm) = model.seleccion_mascara {
+        if let Some(ms) = model.almacen.obtener(hm) {
+            let ms = ms.to_vec();
+            let mc = recortar_buffer_bpp(&ms, w, x0, y0, x1, y1, 1);
+            model.seleccion_mascara = Some(model.almacen.insertar(mc));
+        }
+    }
+    if let Some(rect) = model.seleccion {
+        // Rebasar el origen del recorte al nuevo (0,0) y clampear al lienzo.
+        let nx0 = rect.x0.saturating_sub(x0).min(new_w);
+        let ny0 = rect.y0.saturating_sub(y0).min(new_h);
+        let nx1 = rect.x1.saturating_sub(x0).min(new_w);
+        let ny1 = rect.y1.saturating_sub(y0).min(new_h);
+        model.seleccion = if nx1 > nx0 && ny1 > ny0 {
+            Some(RectImagen { x0: nx0, y0: ny0, x1: nx1, y1: ny1 })
+        } else {
+            // La selección quedó fuera del recorte → nada seleccionado.
+            model.seleccion_mascara = None;
+            None
+        };
+    }
+    sincronizar_overlay_seleccion(model);
     for capa in model.lienzo.capas.iter_mut() {
         if let OrigenCapa::Derivada { estado, .. } = &mut capa.origen {
             *estado = Frescura::Stale;
