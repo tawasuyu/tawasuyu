@@ -89,6 +89,7 @@ pub(crate) use tullpu_paint::{
     bbox_no_transparente,
     blit_alpha_sobre,
     buffer_relleno,
+    combinar_mascaras,
     componer_clip_en_canvas,
     cobertura_pincel,
     estampar_disco,
@@ -105,6 +106,7 @@ pub(crate) use tullpu_paint::{
     rellenar_gradiente,
     rellenar_gradiente_mascara,
     rellenar_rect_en_buffer,
+    ModoMascara,
     rotar_buffer_90_ccw,
     rotar_buffer_90_ccw_bpp,
     rotar_buffer_90_cw,
@@ -2253,8 +2255,9 @@ pub(crate) fn seleccionar_por_color(model: &mut Model, sx: u32, sy: u32) -> bool
         model.estado = "varita · semilla inválida".into();
         return false;
     };
-    // Shift sostenido ⇒ suma a la selección vigente (unión).
-    fijar_o_sumar_mascara(model, mascara, model.shift_held, "varita")
+    // Los modificadores deciden reemplazar / sumar / restar / intersecar.
+    let modo = modo_seleccion(model);
+    fijar_con_modo(model, mascara, modo, "varita")
 }
 
 /// Reconstruye el overlay cacheado de la selección desde `seleccion_mascara`:
@@ -2294,32 +2297,62 @@ pub(crate) fn sincronizar_overlay_seleccion(model: &mut Model) {
     model.seleccion_overlay = overlay;
 }
 
-/// Fija la máscara `nueva` como selección, o la **suma** (unión por píxel,
-/// `max`) a la máscara vigente si `sumar` es `true` (modo Shift). Recalcula el
-/// bounding box y guarda todo en el modelo. Devuelve `false` si la unión
-/// resultante queda vacía. Es el punto común de varita y lazo.
-fn fijar_o_sumar_mascara(model: &mut Model, mut nueva: Vec<u8>, sumar: bool, verbo: &str) -> bool {
+/// Modo de combinación de selección derivado de los modificadores vivos, à la
+/// Photoshop: Shift suma, Alt resta, Shift+Alt interseca, nada reemplaza.
+pub(crate) fn modo_seleccion(model: &Model) -> ModoMascara {
+    match (model.shift_held, model.alt_held) {
+        (true, true) => ModoMascara::Intersecar,
+        (true, false) => ModoMascara::Unir,
+        (false, true) => ModoMascara::Restar,
+        (false, false) => ModoMascara::Reemplazar,
+    }
+}
+
+/// Combina la máscara `nueva` con la selección vigente según `modo`
+/// ([`combinar_mascaras`]) y la fija como selección: recalcula el bounding box y
+/// guarda todo en el modelo. Con `Reemplazar` la base se ignora; los otros tres
+/// modos leen la cobertura actual (o una máscara vacía si no había selección).
+/// Devuelve `false` si el resultado queda vacío (p. ej. restar todo, o
+/// intersecar con nada). Es el punto común de varita y lazo.
+fn fijar_con_modo(model: &mut Model, nueva: Vec<u8>, modo: ModoMascara, verbo: &str) -> bool {
     let w = model.lienzo.width;
     let h = model.lienzo.height;
-    if sumar {
-        if let Some(prev) = cobertura_seleccion(model) {
-            for (n, p) in nueva.iter_mut().zip(prev.iter()) {
-                *n = (*n).max(*p);
-            }
+    let combinada = if modo == ModoMascara::Reemplazar {
+        nueva
+    } else {
+        let base = cobertura_seleccion(model)
+            .unwrap_or_else(|| vec![0u8; (w as usize) * (h as usize)]);
+        combinar_mascaras(&base, &nueva, modo)
+    };
+    let Some(bbox) = bbox_de_mascara(&combinada, w, h) else {
+        // Vacío: distinguí "restar/intersecar dejó nada" de "trazo fuera".
+        model.estado = match modo {
+            ModoMascara::Restar => format!("{verbo} · restó toda la selección"),
+            ModoMascara::Intersecar => format!("{verbo} · sin intersección"),
+            _ => format!("{verbo} · región vacía"),
+        };
+        if matches!(modo, ModoMascara::Restar | ModoMascara::Intersecar) {
+            // La selección quedó vacía de verdad — limpiala.
+            model.seleccion = None;
+            model.seleccion_mascara = None;
+            model.seleccion_overlay = None;
         }
-    }
-    let Some(bbox) = bbox_de_mascara(&nueva, w, h) else {
-        model.estado = format!("{verbo} · región vacía");
         return false;
     };
-    let count = nueva.iter().filter(|&&v| v > 0).count();
-    let hash = model.almacen.insertar(nueva);
+    let count = combinada.iter().filter(|&&v| v > 0).count();
+    let hash = model.almacen.insertar(combinada);
     model.seleccion_mascara = Some(hash);
     model.seleccion = Some(bbox);
     model.seleccion_drag = None;
     model.mover_drag = None;
     sincronizar_overlay_seleccion(model);
-    model.estado = format!("{verbo} · {count} px seleccionados");
+    let etiqueta_modo = match modo {
+        ModoMascara::Reemplazar => "",
+        ModoMascara::Unir => " (+)",
+        ModoMascara::Restar => " (−)",
+        ModoMascara::Intersecar => " (∩)",
+    };
+    model.estado = format!("{verbo}{etiqueta_modo} · {count} px seleccionados");
     true
 }
 
@@ -2365,7 +2398,8 @@ pub(crate) fn seleccionar_lazo(model: &mut Model, puntos: &[(i32, i32)]) -> bool
         return false;
     }
     let mascara = poligono_a_mascara(puntos, w, h);
-    fijar_o_sumar_mascara(model, mascara, model.shift_held, "lazo")
+    let modo = modo_seleccion(model);
+    fijar_con_modo(model, mascara, modo, "lazo")
 }
 
 /// Cobertura de selección como máscara `W·H` (255 = seleccionado). Prefiere

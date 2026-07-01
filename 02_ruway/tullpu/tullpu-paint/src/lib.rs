@@ -372,6 +372,50 @@ pub fn flood_mascara(src: &[u8], w: u32, h: u32, sx: u32, sy: u32, tol: u32) -> 
     Some(mascara)
 }
 
+/// Cómo combinar una máscara nueva con la selección vigente. Calca los cuatro
+/// modos booleanos de Photoshop (nueva selección / sumar / restar / intersecar),
+/// que la UI mapea a los modificadores (nada / Shift / Alt / Shift+Alt).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ModoMascara {
+    /// Descarta la base: la máscara nueva reemplaza a la vigente.
+    Reemplazar,
+    /// Unión por píxel (`max`): la selección crece con lo nuevo.
+    Unir,
+    /// Diferencia: quita de la base lo cubierto por la nueva.
+    Restar,
+    /// Intersección por píxel (`min`): sólo lo común a ambas queda.
+    Intersecar,
+}
+
+/// Combina la máscara `nueva` sobre `base` (ambas de un canal `W·H`, mismo
+/// tamaño) según `modo`. Trabaja sobre la **cobertura** cruda `0..=255`, así que
+/// preserva el anti-aliasing / feather de cualquiera de las dos:
+/// - `Reemplazar` ignora `base` y devuelve una copia de `nueva`.
+/// - `Unir` → `max(base, nueva)`.
+/// - `Intersecar` → `min(base, nueva)`.
+/// - `Restar` → `base · (255 − nueva) / 255` (la nueva atenúa la base por
+///   cobertura; con máscaras binarias equivale a `base AND NOT nueva`).
+/// Si los tamaños difieren opera sobre el mínimo común (defensivo). Pura.
+pub fn combinar_mascaras(base: &[u8], nueva: &[u8], modo: ModoMascara) -> Vec<u8> {
+    if modo == ModoMascara::Reemplazar {
+        return nueva.to_vec();
+    }
+    let n = base.len().min(nueva.len());
+    let mut out = vec![0u8; n];
+    for i in 0..n {
+        let b = base[i] as u32;
+        let s = nueva[i] as u32;
+        out[i] = match modo {
+            ModoMascara::Unir => b.max(s) as u8,
+            ModoMascara::Intersecar => b.min(s) as u8,
+            // Redondeo al entero más cercano: +127 antes de dividir por 255.
+            ModoMascara::Restar => ((b * (255 - s) + 127) / 255) as u8,
+            ModoMascara::Reemplazar => unreachable!(),
+        };
+    }
+    out
+}
+
 /// Rasteriza un polígono (lista de vértices en coords-imagen) a una máscara
 /// de un canal `W·H` por relleno scanline con regla **par-impar** (even-odd):
 /// 255 dentro del polígono, 0 fuera. Es la base de la herramienta lazo —
@@ -1095,6 +1139,45 @@ mod tests {
         // (1,1) está dentro (x+y < 7); (6,6) fuera.
         assert_eq!(m[1 * 8 + 1], 255, "interior seleccionado");
         assert_eq!(m[6 * 8 + 6], 0, "exterior libre");
+    }
+
+    #[test]
+    fn combinar_mascaras_los_cuatro_modos() {
+        // base = [255, 255, 0, 0], nueva = [0, 255, 255, 0]
+        let base = [255u8, 255, 0, 0];
+        let nueva = [0u8, 255, 255, 0];
+        assert_eq!(
+            combinar_mascaras(&base, &nueva, ModoMascara::Reemplazar),
+            vec![0, 255, 255, 0],
+            "reemplazar ignora la base"
+        );
+        assert_eq!(
+            combinar_mascaras(&base, &nueva, ModoMascara::Unir),
+            vec![255, 255, 255, 0],
+            "unir = max"
+        );
+        assert_eq!(
+            combinar_mascaras(&base, &nueva, ModoMascara::Intersecar),
+            vec![0, 255, 0, 0],
+            "intersecar = min (sólo el píxel común)"
+        );
+        assert_eq!(
+            combinar_mascaras(&base, &nueva, ModoMascara::Restar),
+            vec![255, 0, 0, 0],
+            "restar = base menos lo cubierto por nueva"
+        );
+    }
+
+    #[test]
+    fn combinar_mascaras_preserva_cobertura_parcial() {
+        // Restar con cobertura parcial atenúa proporcionalmente (feather-safe):
+        // base plena (255) menos media cobertura (128) ⇒ ~127.
+        let out = combinar_mascaras(&[255], &[128], ModoMascara::Restar);
+        assert_eq!(out[0], ((255u32 * (255 - 128) + 127) / 255) as u8);
+        assert_eq!(out[0], 127, "restar media cobertura ≈ mitad");
+        // Intersección de coberturas parciales toma la menor.
+        assert_eq!(combinar_mascaras(&[200], &[80], ModoMascara::Intersecar), vec![80]);
+        assert_eq!(combinar_mascaras(&[200], &[80], ModoMascara::Unir), vec![200]);
     }
 
     #[test]

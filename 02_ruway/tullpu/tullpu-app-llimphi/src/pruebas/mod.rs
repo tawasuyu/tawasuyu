@@ -106,6 +106,11 @@ mod grupo_06;
             toasts: Vec::new(),
             next_toast: 0,
             transform: None,
+            pluma_capa: None,
+            pluma_ancla: None,
+            pluma_rect: None,
+            pluma_control: None,
+            snap_grid: None,
         }
     }
 

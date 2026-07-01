@@ -618,6 +618,78 @@
     }
 
     #[test]
+    fn varita_con_alt_resta_de_la_seleccion_previa() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        // Buffer 4×4: columna x<2 roja, x>=2 azul.
+        let (w, h) = (4u32, 4u32);
+        let mut buf = Vec::new();
+        for _y in 0..h {
+            for x in 0..w {
+                if x < 2 { buf.extend_from_slice(&[255, 0, 0, 255]); }
+                else { buf.extend_from_slice(&[0, 0, 255, 255]); }
+            }
+        }
+        let hash = model.almacen.insertar(buf);
+        model.lienzo.capa_mut(id).unwrap().contenido = hash;
+        // 1) selecciono rojo, 2) shift+azul ⇒ todo, 3) alt+azul ⇒ resta el azul.
+        model.shift_held = false;
+        model.alt_held = false;
+        assert!(seleccionar_por_color(&mut model, 0, 0));
+        model.shift_held = true;
+        assert!(seleccionar_por_color(&mut model, 3, 0));
+        model.shift_held = false;
+        model.alt_held = true;
+        assert!(seleccionar_por_color(&mut model, 3, 0));
+        let cov = cobertura_seleccion(&model).unwrap();
+        // Sólo el rojo (cols 0,1) queda; el azul (cols 2,3) restado.
+        for y in 0..h as usize {
+            assert_eq!(cov[y * 4], 255, "col 0 (rojo) sigue");
+            assert_eq!(cov[y * 4 + 1], 255, "col 1 (rojo) sigue");
+            assert_eq!(cov[y * 4 + 2], 0, "col 2 (azul) restada");
+            assert_eq!(cov[y * 4 + 3], 0, "col 3 (azul) restada");
+        }
+        let bbox = model.seleccion.unwrap();
+        assert_eq!((bbox.x0, bbox.x1), (0, 2), "bbox recogido a la mitad roja");
+    }
+
+    #[test]
+    fn restar_toda_la_seleccion_la_vacia() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        let hash = model.almacen.insertar(vec![255u8; 4 * 4 * 4]); // todo blanco
+        model.lienzo.capa_mut(id).unwrap().contenido = hash;
+        model.shift_held = false;
+        model.alt_held = false;
+        assert!(seleccionar_por_color(&mut model, 0, 0)); // todo el lienzo
+        // Alt sobre el mismo color resta todo ⇒ selección vacía (devuelve false).
+        model.alt_held = true;
+        assert!(!seleccionar_por_color(&mut model, 0, 0));
+        assert!(model.seleccion_mascara.is_none(), "resta total limpia la máscara");
+        assert!(model.seleccion.is_none(), "y también el rect");
+    }
+
+    #[test]
+    fn lazo_con_shift_alt_interseca() {
+        let mut model = modelo_minimo(); // lienzo 4×4
+        // 1) lazo cubre la banda superior (filas 0,1), todo el ancho.
+        model.shift_held = false;
+        model.alt_held = false;
+        assert!(seleccionar_lazo(&mut model, &[(0, 0), (3, 0), (3, 2), (0, 2)]));
+        // 2) shift+alt: lazo cubre la banda izquierda (cols 0..2), todo el alto.
+        model.shift_held = true;
+        model.alt_held = true;
+        assert!(seleccionar_lazo(&mut model, &[(0, 0), (2, 0), (2, 4), (0, 4)]));
+        let cov = cobertura_seleccion(&model).unwrap();
+        let at = |x: usize, y: usize| cov[y * 4 + x];
+        // Intersección = filas {0,1} ∩ cols {0,1,2}.
+        assert_eq!(at(0, 0), 255, "esquina común seleccionada");
+        assert_eq!(at(2, 1), 255, "interior común seleccionado");
+        assert_eq!(at(3, 0), 0, "col 3 fuera de la banda izquierda");
+        assert_eq!(at(0, 2), 0, "fila 2 fuera de la banda superior");
+    }
+
+    #[test]
     fn overlay_se_arma_con_la_varita_y_se_limpia_al_seleccionar_todo() {
         let mut model = modelo_minimo();
         let id = model.seleccionada.unwrap();

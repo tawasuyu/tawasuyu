@@ -316,6 +316,11 @@ fn modelo_demo() -> Model {
         toasts: Vec::new(),
         next_toast: 0,
         transform: None,
+        pluma_capa: None,
+        pluma_ancla: None,
+        pluma_rect: None,
+        pluma_control: None,
+        snap_grid: None,
     };
 
     // Regenera las derivadas stale (blur + restyle) con el mock, compone el
