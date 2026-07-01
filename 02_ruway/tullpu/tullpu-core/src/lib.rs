@@ -625,6 +625,103 @@ impl ParamsVector {
         };
     }
 
+    /// Convierte la cúbica (`CurvaA`) en `idx` de vuelta a un segmento recto
+    /// (`LineaA`) al mismo endpoint — "esquinar" el nodo, inverso de
+    /// [`Self::convertir_a_curva`]. Descarta los controles. No-op si `idx` no es
+    /// `CurvaA`.
+    pub fn convertir_a_linea(&mut self, idx: usize) {
+        if let Some(ComandoPath::CurvaA { x, y, .. }) = self.comandos.get(idx).copied() {
+            self.comandos[idx] = ComandoPath::LineaA { x, y };
+        }
+    }
+
+    /// Inserta un ancla nuevo **en medio** del segmento cuyo endpoint es el
+    /// comando `idx`, en el parámetro `t ∈ (0,1)`. Para un `LineaA` interpola
+    /// linealmente; para un `CurvaA` parte la cúbica con de Casteljau en dos
+    /// cúbicas que reproducen la curva original exactamente. No-op si `idx` no
+    /// apunta a un `LineaA`/`CurvaA`, si no hay ancla previa, o si `t` no está en
+    /// `(0,1)`. Es el "agregar punto a un trazado" del pen tool.
+    pub fn insertar_vertice_en_segmento(&mut self, idx: usize, t: f32) {
+        if !(t > 0.0 && t < 1.0) {
+            return;
+        }
+        // Ancla previa (punto de arranque del segmento).
+        let prev = match idx.checked_sub(1).and_then(|i| self.comandos.get(i)) {
+            Some(ComandoPath::MoverA { x, y })
+            | Some(ComandoPath::LineaA { x, y })
+            | Some(ComandoPath::CurvaA { x, y, .. }) => (*x, *y),
+            _ => return,
+        };
+        let lerp = |a: (f32, f32), b: (f32, f32)| {
+            (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t)
+        };
+        match self.comandos.get(idx).copied() {
+            Some(ComandoPath::LineaA { x, y }) => {
+                let m = lerp(prev, (x, y));
+                // El endpoint original queda; insertamos el punto medio antes.
+                self.comandos.insert(idx, ComandoPath::LineaA { x: m.0, y: m.1 });
+            }
+            Some(ComandoPath::CurvaA { c1x, c1y, c2x, c2y, x, y }) => {
+                // de Casteljau: parte la cúbica P0-c1-c2-P1 en dos en `t`.
+                let p0 = prev;
+                let p1 = (c1x, c1y);
+                let p2 = (c2x, c2y);
+                let p3 = (x, y);
+                let a = lerp(p0, p1);
+                let b = lerp(p1, p2);
+                let c = lerp(p2, p3);
+                let d = lerp(a, b);
+                let e = lerp(b, c);
+                let m = lerp(d, e); // punto de división (on-curve)
+                // Primera mitad: P0 –a– d– M ; segunda: M –e– c– P1.
+                self.comandos[idx] = ComandoPath::CurvaA {
+                    c1x: a.0, c1y: a.1, c2x: d.0, c2y: d.1, x: m.0, y: m.1,
+                };
+                self.comandos.insert(idx + 1, ComandoPath::CurvaA {
+                    c1x: e.0, c1y: e.1, c2x: c.0, c2y: c.1, x: p3.0, y: p3.1,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    /// Segmento del path más cercano a `(px, py)`: `(idx, t, dist)` con `idx` =
+    /// comando endpoint del segmento, `t ∈ [0,1]` el parámetro del punto más
+    /// próximo sobre él, y `dist` la distancia euclídea. `None` si no hay
+    /// segmentos. Las cúbicas se muestrean en 32 pasos (suficiente para
+    /// hit-testing interactivo). Alimenta el "agregar punto sobre el trazado":
+    /// combinado con [`Self::insertar_vertice_en_segmento`] parte donde se clickea.
+    pub fn segmento_mas_cercano(&self, px: f32, py: f32) -> Option<(usize, f32, f32)> {
+        let mut prev: Option<(f32, f32)> = None;
+        let mut mejor: Option<(usize, f32, f32)> = None;
+        let mut considerar = |i: usize, t: f32, d: f32| {
+            if mejor.map(|(_, _, md)| d < md).unwrap_or(true) {
+                mejor = Some((i, t, d));
+            }
+        };
+        for (i, c) in self.comandos.iter().enumerate() {
+            match *c {
+                ComandoPath::MoverA { x, y } => prev = Some((x, y)),
+                ComandoPath::LineaA { x, y } => {
+                    if let Some(p0) = prev {
+                        let (t, d) = dist_punto_segmento(p0, (x, y), (px, py));
+                        considerar(i, t, d);
+                    }
+                    prev = Some((x, y));
+                }
+                ComandoPath::CurvaA { c1x, c1y, c2x, c2y, x, y } => {
+                    if let Some(p0) = prev {
+                        let (t, d) = dist_punto_cubica(p0, (c1x, c1y), (c2x, c2y), (x, y), (px, py));
+                        considerar(i, t, d);
+                    }
+                    prev = Some((x, y));
+                }
+                ComandoPath::Cerrar => {}
+            }
+        }
+        mejor
+    }
+
     /// Traslada **todo** el path por `(dx, dy)` (mover la capa vectorial entera).
     pub fn trasladar(&mut self, dx: f32, dy: f32) {
         self.transformar([1.0, 0.0, 0.0, 1.0, dx, dy]);
@@ -751,6 +848,49 @@ impl ParamsVector {
             estilo_trazo: None,
         }
     }
+}
+
+/// Distancia de `p` al segmento recto `a→b` y el parámetro `t ∈ [0,1]` del
+/// punto más cercano (clampeado a los extremos). Pura.
+fn dist_punto_segmento(a: (f32, f32), b: (f32, f32), p: (f32, f32)) -> (f32, f32) {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 <= 1e-12 {
+        0.0
+    } else {
+        (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
+    };
+    let (cx, cy) = (a.0 + dx * t, a.1 + dy * t);
+    let d = ((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt();
+    (t, d)
+}
+
+/// Distancia de `p` a la cúbica `p0-c1-c2-p3` por muestreo (32 pasos) y el
+/// parámetro `t` del punto muestreado más cercano. Pura.
+fn dist_punto_cubica(
+    p0: (f32, f32),
+    c1: (f32, f32),
+    c2: (f32, f32),
+    p3: (f32, f32),
+    p: (f32, f32),
+) -> (f32, f32) {
+    const PASOS: u32 = 32;
+    let eval = |t: f32| {
+        let u = 1.0 - t;
+        let x = u * u * u * p0.0 + 3.0 * u * u * t * c1.0 + 3.0 * u * t * t * c2.0 + t * t * t * p3.0;
+        let y = u * u * u * p0.1 + 3.0 * u * u * t * c1.1 + 3.0 * u * t * t * c2.1 + t * t * t * p3.1;
+        (x, y)
+    };
+    let mut mejor = (0.0f32, f32::INFINITY);
+    for k in 0..=PASOS {
+        let t = k as f32 / PASOS as f32;
+        let (x, y) = eval(t);
+        let d = ((p.0 - x).powi(2) + (p.1 - y).powi(2)).sqrt();
+        if d < mejor.1 {
+            mejor = (t, d);
+        }
+    }
+    mejor
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1395,6 +1535,96 @@ mod tests {
         assert_eq!(e.puntos_ancla().len(), 10); // 2 * puntas
         let h = ParamsVector::poligono_regular(0.0, 0.0, 10.0, 6, [0, 0, 0, 255]);
         assert_eq!(h.puntos_ancla().len(), 6);
+    }
+
+    #[test]
+    fn convertir_a_linea_es_inverso_de_a_curva() {
+        let mut p = ParamsVector {
+            comandos: vec![
+                ComandoPath::MoverA { x: 0.0, y: 0.0 },
+                ComandoPath::LineaA { x: 9.0, y: 0.0 },
+            ],
+            relleno: None, gradiente: None, regla: ReglaRelleno::NoCero,
+            trazo: Some([0, 0, 0, 255]), ancho_trazo: 1.0, estilo_trazo: None,
+        };
+        p.convertir_a_curva(1);
+        assert!(matches!(p.comandos[1], ComandoPath::CurvaA { .. }));
+        p.convertir_a_linea(1);
+        // Vuelve a LineaA al mismo endpoint; los controles se descartaron.
+        assert_eq!(p.comandos[1], ComandoPath::LineaA { x: 9.0, y: 0.0 });
+        assert!(p.puntos_control().is_empty());
+    }
+
+    #[test]
+    fn insertar_vertice_en_linea_parte_en_el_punto_medio() {
+        let mut p = ParamsVector {
+            comandos: vec![
+                ComandoPath::MoverA { x: 0.0, y: 0.0 },
+                ComandoPath::LineaA { x: 10.0, y: 0.0 },
+            ],
+            relleno: None, gradiente: None, regla: ReglaRelleno::NoCero,
+            trazo: Some([0, 0, 0, 255]), ancho_trazo: 1.0, estilo_trazo: None,
+        };
+        p.insertar_vertice_en_segmento(1, 0.5);
+        // Ahora hay 3 anclas: 0, punto medio (5,0), y el original (10,0).
+        let anclas: Vec<[f32; 2]> = p.puntos_ancla().into_iter().map(|(_, xy)| xy).collect();
+        assert_eq!(anclas, vec![[0.0, 0.0], [5.0, 0.0], [10.0, 0.0]]);
+        // t fuera de (0,1) es no-op.
+        let antes = p.comandos.len();
+        p.insertar_vertice_en_segmento(1, 0.0);
+        p.insertar_vertice_en_segmento(1, 1.0);
+        assert_eq!(p.comandos.len(), antes);
+    }
+
+    #[test]
+    fn insertar_vertice_en_curva_preserva_la_forma() {
+        // Cúbica de (0,0) a (30,0) con controles arqueando hacia arriba.
+        let p0 = (0.0f32, 0.0f32);
+        let c1 = (10.0f32, 30.0f32);
+        let c2 = (20.0f32, 30.0f32);
+        let p3 = (30.0f32, 0.0f32);
+        let mut p = ParamsVector {
+            comandos: vec![
+                ComandoPath::MoverA { x: p0.0, y: p0.1 },
+                ComandoPath::CurvaA { c1x: c1.0, c1y: c1.1, c2x: c2.0, c2y: c2.1, x: p3.0, y: p3.1 },
+            ],
+            relleno: None, gradiente: None, regla: ReglaRelleno::NoCero,
+            trazo: Some([0, 0, 0, 255]), ancho_trazo: 1.0, estilo_trazo: None,
+        };
+        // Evaluador de la cúbica original en t.
+        let eval = |t: f32| {
+            let u = 1.0 - t;
+            let x = u*u*u*p0.0 + 3.0*u*u*t*c1.0 + 3.0*u*t*t*c2.0 + t*t*t*p3.0;
+            let y = u*u*u*p0.1 + 3.0*u*u*t*c1.1 + 3.0*u*t*t*c2.1 + t*t*t*p3.1;
+            (x, y)
+        };
+        let tt = 0.4;
+        let esperado = eval(tt);
+        p.insertar_vertice_en_segmento(1, tt);
+        // Dos cúbicas ahora; el ancla intermedio está sobre la curva original.
+        let curvas = p.comandos.iter().filter(|c| matches!(c, ComandoPath::CurvaA { .. })).count();
+        assert_eq!(curvas, 2, "la curva se partió en dos cúbicas");
+        let medio = p.puntos_ancla()[1].1; // el ancla insertado
+        assert!((medio[0] - esperado.0).abs() < 1e-3, "x del punto de división sobre la curva");
+        assert!((medio[1] - esperado.1).abs() < 1e-3, "y del punto de división sobre la curva");
+        // El endpoint final sigue siendo P3.
+        assert_eq!(p.puntos_ancla().last().unwrap().1, [p3.0, p3.1]);
+    }
+
+    #[test]
+    fn segmento_mas_cercano_elige_el_correcto_y_su_t() {
+        // Cuadrado 0..10: aristas superior (0,0)->(10,0), derecha, inferior, izq.
+        let p = ParamsVector::rectangulo(0.0, 0.0, 10.0, 10.0, [0, 0, 0, 255]);
+        // Un punto justo debajo del medio de la arista superior.
+        let (idx, t, d) = p.segmento_mas_cercano(5.0, 0.3).unwrap();
+        assert_eq!(idx, 1, "arista superior es el comando 1 (LineaA)");
+        assert!((t - 0.5).abs() < 0.05, "t≈0.5 (medio de la arista)");
+        assert!((d - 0.3).abs() < 1e-3, "distancia = 0.3");
+        // Insertar ahí parte la arista en el punto (5,0).
+        let mut p2 = p.clone();
+        p2.insertar_vertice_en_segmento(idx, t);
+        let cerca = p2.puntos_ancla().iter().any(|(_, xy)| (xy[0] - 5.0).abs() < 0.6 && xy[1].abs() < 0.6);
+        assert!(cerca, "hay un ancla nuevo cerca de (5,0)");
     }
 
     #[test]

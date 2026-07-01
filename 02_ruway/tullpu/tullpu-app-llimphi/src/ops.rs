@@ -1761,8 +1761,8 @@ pub(crate) fn pluma_press(model: &mut Model, lx: f32, ly: f32, rw: f32, rh: f32)
         }
     }
 
-    // 2) Ancla: Alt+click la borra; Shift+click convierte su segmento recto en
-    //    curva (para poder curvarlo); si no, la agarra para arrastrar.
+    // 2) Ancla: Alt+click la borra; Shift+click alterna el tipo del nodo
+    //    (recta↔curva); si no, la agarra para arrastrar.
     if let Some(id) = objetivo {
         if let Some(idx) = ancla_cercana(model, id, ix, iy, umbral) {
             model.pluma_capa = Some(id);
@@ -1772,12 +1772,36 @@ pub(crate) fn pluma_press(model: &mut Model, lx: f32, ly: f32, rw: f32, rh: f32)
                 return true;
             }
             if model.shift_held {
-                editar_params_vector(model, id, |p| p.convertir_a_curva(idx));
+                // Alterna el tipo del nodo: curva → esquina (recta), recta → curva.
+                editar_params_vector(model, id, |p| {
+                    match p.comandos.get(idx) {
+                        Some(tullpu_core::ComandoPath::CurvaA { .. }) => p.convertir_a_linea(idx),
+                        _ => p.convertir_a_curva(idx),
+                    }
+                });
                 model.pluma_ancla = None;
                 return true;
             }
             model.pluma_ancla = Some((idx, ix, iy));
             return false;
+        }
+    }
+
+    // 2.5) Sin ancla ni control bajo el cursor: si el click cae sobre un
+    //      segmento del path en edición, inserta un ancla ahí (agregar punto
+    //      sobre el trazado, como el pen tool de Photoshop).
+    if let Some(id) = objetivo {
+        let hit = model
+            .lienzo
+            .capa(id)
+            .and_then(|c| c.params_vector())
+            .and_then(|p| p.segmento_mas_cercano(ix, iy))
+            .filter(|&(_, _, d)| d <= umbral);
+        if let Some((idx, t, _)) = hit {
+            editar_params_vector(model, id, |p| p.insertar_vertice_en_segmento(idx, t));
+            model.pluma_capa = Some(id);
+            model.pluma_ancla = None;
+            return true;
         }
     }
 

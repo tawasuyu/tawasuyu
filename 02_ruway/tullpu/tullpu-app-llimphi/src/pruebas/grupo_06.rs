@@ -725,6 +725,52 @@
         assert_eq!(cov[1], 0, "(2,1)→(1,0) no marcado — forma conservada");
     }
 
+    // Modelo con una capa vectorial rectángulo (10,10)-(90,90) en lienzo
+    // 100×100, herramienta Pluma, lista para hit-testing sin ambigüedad de
+    // umbral (s=1 con rw=rh=100 → umbral ~9px, geometría bien separada).
+    fn modelo_vector_rect() -> (Model, Uuid) {
+        let mut model = modelo_minimo();
+        model.lienzo = tullpu_core::Lienzo::nuevo(100, 100);
+        let params = tullpu_core::ParamsVector::rectangulo(10.0, 10.0, 80.0, 80.0, [0, 0, 0, 255]);
+        let hash = model.almacen.insertar(vec![0u8; 100 * 100 * 4]);
+        let cap = tullpu_core::Capa::vector("v", hash, params);
+        let id = cap.id;
+        model.lienzo.apilar(cap);
+        model.seleccionada = Some(id);
+        model.herramienta = Herramienta::Pluma;
+        model.shift_held = false;
+        model.alt_held = false;
+        model.pluma_capa = None;
+        (model, id)
+    }
+
+    #[test]
+    fn pluma_click_en_segmento_inserta_ancla() {
+        let (mut model, id) = modelo_vector_rect();
+        let ancla = |m: &Model| {
+            m.lienzo.capa(id).unwrap().params_vector().unwrap().puntos_ancla().len()
+        };
+        let antes = ancla(&model);
+        // Click en el medio de la arista superior (50, 10.5): sobre el segmento,
+        // lejos de las esquinas → inserta un ancla ahí.
+        pluma_press(&mut model, 50.0, 10.5, 100.0, 100.0);
+        assert_eq!(ancla(&model), antes + 1, "un ancla nuevo sobre el segmento");
+    }
+
+    #[test]
+    fn pluma_shift_click_alterna_recta_y_curva() {
+        let (mut model, id) = modelo_vector_rect();
+        model.shift_held = true;
+        let cmd1 = |m: &Model| m.lienzo.capa(id).unwrap().params_vector().unwrap().comandos[1];
+        // La arista superior es comando 1 (LineaA hacia (90,10)). Shift+click en
+        // la esquina (90,10) alterna su tipo.
+        assert!(matches!(cmd1(&model), tullpu_core::ComandoPath::LineaA { .. }));
+        pluma_press(&mut model, 90.0, 10.2, 100.0, 100.0);
+        assert!(matches!(cmd1(&model), tullpu_core::ComandoPath::CurvaA { .. }), "recta → curva");
+        pluma_press(&mut model, 90.0, 10.2, 100.0, 100.0);
+        assert!(matches!(cmd1(&model), tullpu_core::ComandoPath::LineaA { .. }), "curva → recta");
+    }
+
     #[test]
     fn expandir_seleccion_por_mascara_conserva_forma() {
         // Máscara diagonal (0,0)+(3,3) en 4×4: expandir la crece sin degradar
