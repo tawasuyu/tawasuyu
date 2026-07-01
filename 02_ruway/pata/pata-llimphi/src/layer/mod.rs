@@ -153,6 +153,14 @@ pub(super) struct Panel {
     pub(super) idx: usize,
     /// `Some` si esta surface es una tarjeta flotante; `None` si es una barra.
     pub(super) card: Option<CardState>,
+    /// `true` si esta surface es el **panel flotante** de un sidebar (el «drawer»
+    /// que se despliega al abrir un diente), creado a demanda como una layer
+    /// surface APARTE del rail. Su `idx` apunta al mismo `SurfaceKind::Sidebar` que
+    /// el rail. Los rails tienen `false`. Ver [`super::app_impl::LayerApp::reconcile_drawer`].
+    pub(super) drawer: bool,
+    /// El `wl_output` destino de esta surface (o `None` = primario). Se guarda para
+    /// poder crear el drawer en el MISMO monitor que su rail.
+    pub(super) output: Option<wl_output::WlOutput>,
     pub(super) layer: LayerSurface,
     /// El árbol del último frame (para hit-test de clicks).
     pub(super) cache: Option<RenderCache>,
@@ -433,6 +441,19 @@ pub(super) struct LayerApp {
     pub(super) last_host_rev: u64,
     /// Una layer surface por cada barra de la config.
     pub(super) panels: Vec<Panel>,
+    /// Estado del compositor Wayland, retenido para poder crear surfaces NUEVAS en
+    /// runtime (el drawer del sidebar) — no sólo en el arranque.
+    pub(super) compositor: Option<CompositorState>,
+    /// El `wlr-layer-shell`, retenido por el mismo motivo que `compositor`.
+    pub(super) layer_shell: Option<LayerShell>,
+    /// Índice (en `panels`) del **drawer** del sidebar vivo, si hay uno desplegado.
+    /// El drawer es una layer surface aparte del rail, creada al abrir un diente y
+    /// destruida al cerrarlo — así el panel NUNCA redimensiona una surface (lo que
+    /// falla en Iris Xe), es de tamaño fijo. Siempre es el ÚLTIMO panel de `panels`.
+    pub(super) drawer_pi: Option<usize>,
+    /// Índice de superficie (`si`) del sidebar cuyo drawer está vivo. Sirve para
+    /// reconciliar: si `nav.open` cambió de sidebar, se recrea el drawer.
+    pub(super) drawer_si: Option<usize>,
     /// Índice (en `panels`) de la surface del **tooltip flotante**.
     pub(super) tooltip_pi: Option<usize>,
     /// Texto del tooltip actualmente visible.
@@ -761,6 +782,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         host: (!sidebars.is_empty()).then(HostServer::spawn).flatten(),
         last_host_rev: 0,
         panels: Vec::new(),
+        compositor: None,
+        layer_shell: None,
+        drawer_pi: None,
+        drawer_si: None,
         tooltip_pi: None,
         tooltip_text: None,
         mods: Modifiers::default(),
@@ -837,6 +862,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             app.panels.push(Panel {
                 idx,
                 card: None,
+                drawer: false,
+                output: target.clone(),
                 layer,
                 cache: None,
                 width: size.0.max(1),
@@ -877,6 +904,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             app.panels.push(Panel {
                 idx,
                 card: None,
+                drawer: false,
+                output: target.clone(),
                 layer,
                 cache: None,
                 width: thickness,
@@ -913,6 +942,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             app.panels.push(Panel {
                 idx,
                 card: None,
+                drawer: false,
+                output: target.clone(),
                 layer,
                 cache: None,
                 width: size.0.max(1),
@@ -950,6 +981,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             app.panels.push(Panel {
                 idx,
                 card: None,
+                drawer: false,
+                output: target.clone(),
                 layer,
                 cache: None,
                 width: 1,
@@ -988,6 +1021,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             app.panels.push(Panel {
                 idx,
                 card: Some(CardState { spec: card.clone(), widgets }),
+                drawer: false,
+                output: panel_output.clone(),
                 layer,
                 cache: None,
                 width: cw,
@@ -1046,6 +1081,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         app.panels.push(Panel {
             idx: 0,
             card: None,
+            drawer: false,
+            output: None,
             layer,
             cache: None,
             width: 1,
@@ -1081,6 +1118,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         app.panels.push(Panel {
             idx: 0,
             card: None,
+            drawer: false,
+            output: None,
             layer,
             cache: None,
             width: 1,
@@ -1107,6 +1146,11 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         .menu_panel
         .map(|pi| app.cfg.surfaces[app.panels[pi].idx].thickness.max(1.0) as u32)
         .unwrap_or(32);
+
+    // Retenemos `compositor` y `layer_shell` en `app` para crear el drawer del
+    // sidebar en runtime (ya no se usan más en el arranque).
+    app.compositor = Some(compositor);
+    app.layer_shell = Some(layer_shell);
 
     while !app.exit {
         if let Err(e) = event_queue.blocking_dispatch(&mut app) {

@@ -532,32 +532,144 @@ impl LayerApp {
         }
     }
 
-    /// Índice (en `panels`) de la layer surface del sidebar `si`.
+    /// Índice (en `panels`) de la layer surface del **rail** del sidebar `si` (no
+    /// su drawer: el drawer comparte `idx` pero lleva `drawer == true`).
     pub(super) fn sidebar_panel_de(&self, si: usize) -> Option<usize> {
-        self.panels.iter().position(|p| p.idx == si && p.card.is_none())
+        self.panels
+            .iter()
+            .position(|p| p.idx == si && p.card.is_none() && !p.drawer)
     }
 
-    /// Activa/repliega el diente `(si, ti)`.
+    /// Activa/repliega el diente `(si, ti)`. Sólo toca el ESTADO (`nav.open`) y
+    /// marca el rail sucio; el drawer (una surface aparte) lo crea/destruye
+    /// [`Self::reconcile_drawer`] en el próximo `draw` (que tiene el `QueueHandle`).
+    /// Ya NO redimensiona el rail — ese resize por-diente era lo que fallaba en
+    /// Iris Xe (reconfigurar el swapchain de una layer surface), dejaba el panel
+    /// sin recibir clicks (bbox del buffer = 44px) y traspasaba el puntero a la
+    /// ventana de atrás.
     pub(super) fn set_sidebar_open(&mut self, si: usize, ti: usize) {
         self.nav.toggle_tab(si, ti);
-        let Some(pi) = self.sidebar_panel_de(si) else {
-            return;
+        // El rail repinta la pastilla activa del diente; el drawer se reconcilia solo.
+        if let Some(pi) = self.sidebar_panel_de(si) {
+            self.panels[pi].cache = None;
+            self.panels[pi].dirty = true;
+        }
+    }
+
+    /// Crea/destruye el **drawer** del sidebar para que refleje `nav.open`. Se llama
+    /// desde `draw` (donde hay `QueueHandle`, necesario para crear surfaces). Barato
+    /// y idempotente: si el sidebar abierto no cambió, retorna sin tocar nada.
+    ///
+    /// El drawer es una layer surface APARTE del rail, de tamaño fijo (`panel_width`
+    /// × alto), pegada al borde interno del rail. Al no redimensionarse nunca, evita
+    /// el bug de Iris Xe; al ser su propia surface, el compositor la rutea al puntero
+    /// por su propio bbox (los clicks caen dentro, no traspasan).
+    pub(super) fn reconcile_drawer(&mut self, qh: &QueueHandle<Self>) {
+        let want_si = self.nav.open.map(|(si, _)| si);
+        if want_si == self.drawer_si {
+            return; // estable (mismo sidebar, o ninguno): el contenido lo refresca `dirty`.
+        }
+        // Cambió el sidebar abierto (o se cerró): destruir el drawer viejo…
+        self.destroy_drawer();
+        // …y, si hay uno abierto ahora, crear el suyo.
+        if let Some(si) = want_si {
+            self.create_drawer(si, qh);
+        }
+    }
+
+    /// Crea la surface del drawer para el sidebar `si`, pegada a su rail. La primera
+    /// `configure` (respuesta del compositor al `commit`) fija su tamaño real y
+    /// dispara su primer `draw` → `ensure_gpu` → present, igual que las surfaces del
+    /// arranque. No forzamos un draw acá (aún no hay tamaño configurado).
+    fn create_drawer(&mut self, si: usize, qh: &QueueHandle<Self>) {
+        use smithay_client_toolkit::shell::wlr_layer::{Anchor as LayerAnchor, KeyboardInteractivity, Layer};
+        let Some(rail_pi) = self.sidebar_panel_de(si) else {
+            return; // sin rail no hay dónde pegar el drawer.
         };
         let s = &self.cfg.surfaces[si];
         let thickness = s.thickness.max(1.0) as u32;
-        let abierto = matches!(self.nav.open, Some((s2, _)) if s2 == si);
-        let w = if abierto {
-            thickness + s.panel_width.max(1.0) as u32
-        } else {
-            thickness
+        let pw = s.panel_width.max(1.0) as u32;
+        // Margen lateral hacia el rail. Si el rail RESERVA franja (`exclusive_zone`
+        // = thickness, docked y no autohide), esa zona ya corre el área usable → el
+        // drawer (con `exclusive_zone = 0`) arranca pegado al rail sin margen extra.
+        // Si el rail flota (zona 0), hay que despejar su ancho con un margen.
+        let docked = s.reserve.unwrap_or(self.sidebar_docked);
+        let rail_reserva = docked && !s.autohide;
+        let side_margin = if rail_reserva { 0 } else { thickness as i32 };
+        let anchor = s.anchor;
+        let output = self.panels[rail_pi].output.clone();
+        // (anchor sctk, márgenes top/right/bottom/left) según el borde del sidebar.
+        let (sctk_anchor, margins) = match anchor {
+            pata_core::Anchor::Right => (
+                LayerAnchor::RIGHT | LayerAnchor::TOP | LayerAnchor::BOTTOM,
+                (0, side_margin, 0, 0),
+            ),
+            // Izquierda (default para un sidebar): pegado al borde izquierdo.
+            _ => (
+                LayerAnchor::LEFT | LayerAnchor::TOP | LayerAnchor::BOTTOM,
+                (0, 0, 0, side_margin),
+            ),
         };
-        {
-            let layer = &self.panels[pi].layer;
-            layer.set_size(w, 0);
+        let layer = {
+            let comp = self.compositor.as_ref().expect("compositor retenido");
+            let ls = self.layer_shell.as_ref().expect("layer_shell retenido");
+            let wl_surface = comp.create_surface(qh);
+            let layer = ls.create_layer_surface(
+                qh,
+                wl_surface,
+                Layer::Top,
+                Some("pata-sidebar-panel".to_string()),
+                output.as_ref(),
+            );
+            layer.set_anchor(sctk_anchor);
+            layer.set_size(pw, 0); // alto 0 → el compositor lo estira a la salida.
+            layer.set_margin(margins.0, margins.1, margins.2, margins.3);
+            // Sin zona exclusiva propia: el drawer FLOTA sobre el contenido (como el
+            // drawer del backend winit). Respeta las zonas de las barras (top/bottom)
+            // y del rail, así queda alineado y a la altura correcta.
+            layer.set_exclusive_zone(0);
+            layer.set_keyboard_interactivity(KeyboardInteractivity::None);
             layer.commit();
+            layer
+        };
+        self.panels.push(Panel {
+            idx: si,
+            card: None,
+            drawer: true,
+            output,
+            layer,
+            cache: None,
+            width: pw,
+            height: 1, // provisional hasta la primera `configure`.
+            dirty: true,
+            hover_idx: None,
+            cursor_x: None,
+            gpu: None,
+        });
+        self.drawer_pi = Some(self.panels.len() - 1);
+        self.drawer_si = Some(si);
+    }
+
+    /// Destruye la surface del drawer viva (si hay). El drawer es SIEMPRE el último
+    /// panel (único creado en runtime, ≤ 1 a la vez), así que `pop` no corre los
+    /// índices de los paneles fijos (`osd_pi`/`tooltip_pi`/`menu_panel`/…).
+    fn destroy_drawer(&mut self) {
+        let Some(pi) = self.drawer_pi.take() else { return };
+        self.drawer_si = None;
+        if pi >= self.panels.len() {
+            return; // ya no está (defensivo).
         }
+        // Soltamos la surface wgpu ANTES que la wl_surface (evita que el handle raw
+        // quede colgando al dropear el `LayerSurface`).
+        self.panels[pi].gpu = None;
         self.panels[pi].cache = None;
-        self.panels[pi].dirty = true;
+        if pi == self.panels.len() - 1 {
+            self.panels.pop(); // drop del `LayerSurface` → destruye la surface.
+        } else {
+            // No debería pasar (el drawer es el tail), pero si otro panel se apiló
+            // después, `remove` es correcto: no hay paneles fijos tras el drawer.
+            self.panels.remove(pi);
+        }
     }
 
     /// Aplica EN VIVO el eje docked de la surface `si`: cambia el `exclusive_zone`
@@ -572,12 +684,26 @@ impl LayerApp {
         if let Some(s) = self.cfg.surfaces.get_mut(si) {
             s.reserve = Some(docked);
         }
-        let excl = if docked && !autohide { thickness } else { 0 };
+        let rail_reserva = docked && !autohide;
+        let excl = if rail_reserva { thickness } else { 0 };
+        // El drawer no reserva zona propia, pero su margen lateral depende de si el
+        // rail reserva (0) o flota (thickness): al cambiar el docked en vivo hay que
+        // re-anclarlo para que siga pegado al rail sin hueco ni solape.
+        let side_margin = if rail_reserva { 0 } else { thickness };
+        let anchor = self.cfg.surfaces.get(si).map(|s| s.anchor);
         for p in &self.panels {
-            if p.idx == si {
-                p.layer.set_exclusive_zone(excl);
-                p.layer.commit();
+            if p.idx != si {
+                continue;
             }
+            if p.drawer {
+                match anchor {
+                    Some(pata_core::Anchor::Right) => p.layer.set_margin(0, side_margin, 0, 0),
+                    _ => p.layer.set_margin(0, 0, 0, side_margin),
+                }
+            } else {
+                p.layer.set_exclusive_zone(excl);
+            }
+            p.layer.commit();
         }
         self.marcar_sidebars_dirty();
     }
@@ -1016,6 +1142,17 @@ impl LayerApp {
 
     /// Avanza el frame de un panel.
     pub(super) fn draw(&mut self, pi: usize, qh: &QueueHandle<Self>) {
+        // Reconciliar el drawer del sidebar (crear/destruir su surface) según
+        // `nav.open`. Lo hacemos SÓLO desde los paneles fijos (rails/barras, que
+        // laten en continuo), nunca desde el propio drawer: así reconcile jamás
+        // toca el panel que estamos por dibujar. El `pi >= len` es una red por si
+        // otro camino lo destruyó.
+        if !self.panels[pi].drawer {
+            self.reconcile_drawer(qh);
+        }
+        if pi >= self.panels.len() {
+            return;
+        }
         // Empuje del OSD: su surface arranca 1×1 y podría no recibir frames
         // propios; las barras (que laten en continuo) sirven su draw cuando hay
         // un cartel que mostrar o que encoger. (`pi != osd_pi` evita recursión.)
@@ -1372,23 +1509,41 @@ impl LayerApp {
             let s = &self.cfg.surfaces[idx];
             let docked_ef = s.reserve.unwrap_or(self.sidebar_docked);
             let rail_outside_ef = s.rail_outside.unwrap_or(self.dientes_outside);
-            render::sidebar_surface_view(
-                &self.cfg.surfaces[idx],
-                idx,
-                w as f32,
-                h as f32,
-                &self.nav,
-                hosted_teeth,
-                hosted_app,
-                hosted_active,
-                &self.shuma,
-                &self.rag,
-                &vivo,
-                &centro,
-                docked_ef,
-                rail_outside_ef,
-                &self.theme,
-            )
+            if self.panels[pi].drawer {
+                // El **drawer**: sólo la barrita + el contenido del diente, a ancho
+                // fijo `panel_width`. El rail vive en su propia surface aparte.
+                let ti = self.nav.open.map(|(_, ti)| ti).unwrap_or(0);
+                render::sidebar_drawer_view(
+                    &self.cfg.surfaces[idx],
+                    idx,
+                    ti,
+                    w as f32,
+                    h as f32,
+                    &self.nav,
+                    &self.shuma,
+                    &self.rag,
+                    &centro,
+                    docked_ef,
+                    rail_outside_ef,
+                    &self.theme,
+                )
+            } else {
+                // El **rail**: sólo la franja de dientes (ya no crece para alojar el
+                // panel; de eso se encarga el drawer).
+                render::sidebar_surface_view(
+                    &self.cfg.surfaces[idx],
+                    idx,
+                    w as f32,
+                    h as f32,
+                    &self.nav,
+                    hosted_teeth,
+                    hosted_app,
+                    hosted_active,
+                    &self.shuma,
+                    &vivo,
+                    &self.theme,
+                )
+            }
         } else if self.cfg.surfaces[idx].kind == SurfaceKind::Dock {
             // Dock estilo macOS: apps fijadas (lanzadores) + ventanas abiertas,
             // magnificados por el puntero. Los pins se resuelven en el registro;

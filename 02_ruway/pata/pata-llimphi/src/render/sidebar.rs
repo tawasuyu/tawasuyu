@@ -582,14 +582,17 @@ pub fn nav_panel_view(
 }
 
 // =====================================================================
-// Backend layer-shell: la surface del rail crece para alojar el panel
+// Backend layer-shell: el rail y el drawer viven en surfaces SEPARADAS
 // =====================================================================
 
-/// La vista que llena la layer surface de un `SurfaceKind::Sidebar` de tamaño
-/// `(w, h)` px. Colapsada es sólo el rail (`w == thickness`); con un diente
-/// abierto la surface creció a `thickness + panel_width` y se pinta rail + panel
-/// (el orden depende del anclaje: el rail siempre pegado a su borde). `si` es el
-/// índice de la superficie.
+/// La vista que llena la layer surface del **rail** de un `SurfaceKind::Sidebar`
+/// de tamaño `(w, h)` px (con `w == thickness`). Es SÓLO la franja de dientes: el
+/// panel desplegado lo pinta [`sidebar_drawer_view`] en su propia surface aparte.
+///
+/// (Antes esta surface crecía en ancho para alojar el panel; ese resize por-diente
+/// fallaba al reconfigurar el swapchain en Iris Xe y dejaba el panel sin clicks —
+/// por eso el panel es ahora una surface de tamaño fijo independiente.)
+#[allow(clippy::too_many_arguments)]
 pub fn sidebar_surface_view(
     surface: &Surface,
     si: usize,
@@ -600,11 +603,7 @@ pub fn sidebar_surface_view(
     hosted_app: &str,
     hosted_active: Option<u32>,
     shuma: &ShumaState,
-    rag: &RagState,
     vivo: &DienteVivo,
-    centro: &CentroDatos,
-    docked: bool,
-    rail_outside: bool,
     theme: &Theme,
 ) -> View<Msg> {
     let thickness = surface.thickness;
@@ -620,41 +619,6 @@ pub fn sidebar_surface_view(
         vivo,
         theme,
     );
-
-    let open_ti = match nav.open {
-        Some((s, ti)) if s == si => Some(ti),
-        _ => None,
-    };
-
-    let children = if let Some(ti) = open_ti {
-        let pw = (w - thickness).max(0.0);
-        // Barrita de control de la surface (una línea, al tope del panel) + el
-        // contenido del diente debajo, ocupando el alto restante.
-        let barrita = sidebar_control_bar(si, docked, rail_outside, theme);
-        let cuerpo_h = (h - BARRITA_H).max(0.0);
-        let panel = View::new(Style {
-            flex_direction: FlexDirection::Column,
-            size: Size {
-                width: length(pw),
-                height: percent(1.0_f32),
-            },
-            flex_shrink: 0.0,
-            ..Default::default()
-        })
-        .children(vec![
-            barrita,
-            panel_inner(surface, ti, cuerpo_h, nav, shuma, rag, centro, theme),
-        ]);
-        // El rail va pegado a su borde: a la izquierda del panel si el sidebar
-        // está anclado a la izquierda; a la derecha si está a la derecha.
-        match surface.anchor {
-            Anchor::Right => vec![panel, rail],
-            _ => vec![rail, panel],
-        }
-    } else {
-        vec![rail]
-    };
-
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
@@ -663,7 +627,44 @@ pub fn sidebar_surface_view(
         },
         ..Default::default()
     })
-    .children(children)
+    .children(vec![rail])
+}
+
+/// La vista que llena la layer surface del **drawer** del sidebar `si`: la barrita
+/// de control (una línea) arriba + el contenido del diente `ti` debajo, a ancho
+/// fijo `w == panel_width`. Es una surface aparte del rail, pegada a su borde
+/// interno. `docked`/`rail_outside` son el estado efectivo de los dos ejes (para
+/// los switches de la barrita).
+#[allow(clippy::too_many_arguments)]
+pub fn sidebar_drawer_view(
+    surface: &Surface,
+    si: usize,
+    ti: usize,
+    w: f32,
+    h: f32,
+    nav: &NavState,
+    shuma: &ShumaState,
+    rag: &RagState,
+    centro: &CentroDatos,
+    docked: bool,
+    rail_outside: bool,
+    theme: &Theme,
+) -> View<Msg> {
+    let barrita = sidebar_control_bar(si, docked, rail_outside, theme);
+    let cuerpo_h = (h - BARRITA_H).max(0.0);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(w),
+            height: length(h),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![
+        barrita,
+        panel_inner(surface, ti, cuerpo_h, nav, shuma, rag, centro, theme),
+    ])
 }
 
 // =====================================================================

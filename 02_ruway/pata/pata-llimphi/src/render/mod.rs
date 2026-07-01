@@ -109,7 +109,7 @@ pub use notifications::{notifications_overlay, notifications_view};
 pub use osd::{osd_overlay, osd_surface_view, Osd, OsdKind, OSD_H, OSD_W};
 pub use polkit::polkit_overlay;
 pub use session::{session_overlay, session_view};
-pub use sidebar::{nav_panel_view, sidebar_rail_view, sidebar_surface_view};
+pub use sidebar::{nav_panel_view, sidebar_drawer_view, sidebar_rail_view, sidebar_surface_view};
 pub use start_menus::{start_menu_gnome_overlay, start_menu_xp_overlay};
 pub use task_manager::{clipboard_overlay, clipboard_panel, start_button_view, tray_view, workspaces_view, WsComet};
 pub use weather_cava::{cava_view, weather_view};
