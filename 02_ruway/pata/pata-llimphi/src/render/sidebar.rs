@@ -636,6 +636,20 @@ pub fn sidebar_surface_view(
 /// interno. `docked`/`rail_outside` son el estado efectivo de los dos ejes (para
 /// los switches de la barrita).
 #[allow(clippy::too_many_arguments)]
+/// Vista del drawer CERRADO: un contenedor vacío del tamaño de la surface, SIN
+/// fill. El `render` limpia a transparente, así el drawer queda invisible (y con
+/// input-region vacía, el puntero lo atraviesa). La surface sigue mapeada — nunca
+/// se destruye — para no perder el `VkSurface` en Iris Xe.
+pub fn sidebar_drawer_hidden(w: f32, h: f32) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: length(w),
+            height: length(h),
+        },
+        ..Default::default()
+    })
+}
+
 pub fn sidebar_drawer_view(
     surface: &Surface,
     si: usize,

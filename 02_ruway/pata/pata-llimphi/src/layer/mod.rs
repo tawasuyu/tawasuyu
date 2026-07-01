@@ -446,14 +446,13 @@ pub(super) struct LayerApp {
     pub(super) compositor: Option<CompositorState>,
     /// El `wlr-layer-shell`, retenido por el mismo motivo que `compositor`.
     pub(super) layer_shell: Option<LayerShell>,
-    /// Índice (en `panels`) del **drawer** del sidebar vivo, si hay uno desplegado.
-    /// El drawer es una layer surface aparte del rail, creada al abrir un diente y
-    /// destruida al cerrarlo — así el panel NUNCA redimensiona una surface (lo que
-    /// falla en Iris Xe), es de tamaño fijo. Siempre es el ÚLTIMO panel de `panels`.
-    pub(super) drawer_pi: Option<usize>,
-    /// Índice de superficie (`si`) del sidebar cuyo drawer está vivo. Sirve para
-    /// reconciliar: si `nav.open` cambió de sidebar, se recrea el drawer.
-    pub(super) drawer_si: Option<usize>,
+    /// Índice de superficie (`si`) del sidebar cuyo drawer está VISIBLE ahora mismo,
+    /// si hay uno desplegado. Los drawers son layer surfaces APARTE del rail,
+    /// pre-creadas al arranque (una por sidebar) — NUNCA se crean/destruyen ni se
+    /// redimensionan en runtime (eso pierde el `VkSurface` en Iris Xe). Abrir/cerrar
+    /// un diente sólo togglea la input-region + repinta (ver `reconcile_drawer`);
+    /// este campo recuerda cuál está mostrado para no re-togglear en cada frame.
+    pub(super) drawer_shown_si: Option<usize>,
     /// Índice (en `panels`) de la surface del **tooltip flotante**.
     pub(super) tooltip_pi: Option<usize>,
     /// Texto del tooltip actualmente visible.
@@ -784,8 +783,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         panels: Vec::new(),
         compositor: None,
         layer_shell: None,
-        drawer_pi: None,
-        drawer_si: None,
+        drawer_shown_si: None,
         tooltip_pi: None,
         tooltip_text: None,
         mods: Modifiers::default(),
@@ -910,6 +908,60 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                 cache: None,
                 width: thickness,
                 height: size.1.max(1),
+                dirty: true,
+                hover_idx: None,
+                cursor_x: None,
+                gpu: None,
+            });
+
+            // El PANEL del sidebar (drawer) es una layer surface APARTE del rail,
+            // pre-creada ACÁ al arranque (nunca en runtime: crear/destruir surfaces
+            // wgpu en vivo pierde el `VkSurface` en Iris Xe → ERROR_SURFACE_LOST_KHR
+            // y muere pata). De tamaño fijo `panel_width` × alto de salida, pegada al
+            // borde interno del rail. Arranca CERRADA: input-region VACÍA (el puntero
+            // la atraviesa) y se pinta transparente; abrir un diente sólo togglea la
+            // input-region + repinta contenido (ver `reconcile_drawer`).
+            let pw = s.panel_width.max(1.0) as u32;
+            let rail_reserva = docked && !s.autohide;
+            let side_margin = if rail_reserva { 0 } else { thickness as i32 };
+            let (drawer_anchor, dmargins) = match s.anchor {
+                pata_core::Anchor::Right => (
+                    LayerAnchor::RIGHT | LayerAnchor::TOP | LayerAnchor::BOTTOM,
+                    (0, side_margin, 0, 0),
+                ),
+                // Izquierda (default de un sidebar): pegado al borde izquierdo.
+                _ => (
+                    LayerAnchor::LEFT | LayerAnchor::TOP | LayerAnchor::BOTTOM,
+                    (0, 0, 0, side_margin),
+                ),
+            };
+            let wl_surface = compositor.create_surface(&qh);
+            // input-region VACÍA = arranca cerrada (click-through).
+            if let Ok(region) = Region::new(&compositor) {
+                wl_surface.set_input_region(Some(region.wl_region()));
+            }
+            let layer = layer_shell.create_layer_surface(
+                &qh,
+                wl_surface,
+                Layer::Top,
+                Some("pata-sidebar-panel".to_string()),
+                target.as_ref(),
+            );
+            layer.set_anchor(drawer_anchor);
+            layer.set_size(pw, 0); // alto 0 → el compositor lo estira a la salida.
+            layer.set_margin(dmargins.0, dmargins.1, dmargins.2, dmargins.3);
+            layer.set_exclusive_zone(0); // no reserva franja: flota sobre el contenido.
+            layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+            layer.commit();
+            app.panels.push(Panel {
+                idx,
+                card: None,
+                drawer: true,
+                output: target.clone(),
+                layer,
+                cache: None,
+                width: pw,
+                height: 1, // provisional hasta la primera `configure`.
                 dirty: true,
                 hover_idx: None,
                 cursor_x: None,
