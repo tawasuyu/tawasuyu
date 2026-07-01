@@ -600,20 +600,26 @@ impl LayerApp {
     }
 
     /// Ajusta la input-region del drawer `pi`: `None` (toda la surface recibe input,
-    /// drawer abierto) o VACÍA (el puntero lo atraviesa, drawer cerrado). El cambio
-    /// se latchea en el próximo commit de la surface — que es el `present` del
-    /// repintado que dispara `reconcile_drawer` al marcar el panel `dirty`.
+    /// drawer abierto) o VACÍA (el puntero lo atraviesa, drawer cerrado).
+    ///
+    /// CLAVE: hay que **commitear la surface acá mismo**. `set_input_region` es estado
+    /// double-buffered que sólo se aplica en el próximo `commit`; NO alcanza con
+    /// confiar en el `present` de wgpu (Mesa WSI no arrastra este pending) — así el
+    /// drawer se quedaba con la región VACÍA del arranque incluso abierto, y el
+    /// puntero lo atravesaba siempre. Un commit sin buffer nuevo sólo aplica el
+    /// estado pendiente (la región); no toca el swapchain ni el buffer visible.
     fn set_drawer_clickable(&self, pi: usize, clickable: bool) {
         use smithay_client_toolkit::compositor::Region;
         use smithay_client_toolkit::shell::WaylandSurface;
         let surf = self.panels[pi].layer.wl_surface();
         if clickable {
-            surf.set_input_region(None);
+            surf.set_input_region(None); // None = toda la surface recibe input.
         } else if let Some(comp) = self.compositor.as_ref() {
             if let Ok(region) = Region::new(comp) {
                 surf.set_input_region(Some(region.wl_region())); // región vacía = atraviesa.
             }
         }
+        surf.commit(); // aplica la región YA (sin adjuntar buffer nuevo).
     }
 
     /// Aplica EN VIVO el eje docked de la surface `si`: cambia el `exclusive_zone`
