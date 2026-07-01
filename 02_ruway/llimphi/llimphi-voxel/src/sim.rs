@@ -11,6 +11,7 @@
 //! (llimphi_3d::VoxelRenderer::sync). El paso es determinista (sin azar): mismas
 //! condiciones → misma evolución.
 
+use crate::ecuacion::{FieldDef, FieldEngine, Program};
 use llimphi_3d::VoxelGrid;
 
 const AIR: u8 = 0;
@@ -304,6 +305,120 @@ impl GrowthSim {
     }
 }
 
+/// Simulación de una ley [`Ecuacion`](crate::LeyKind::Ecuacion) **sobre un material
+/// real del mundo**: corre el sistema de ecuaciones de campo en las celdas del material
+/// y las **recolorea** por el valor del campo visible — el material queda donde está,
+/// "vivo" según su ecuación (a diferencia de [`WaterSim`], que mueve celdas).
+///
+/// Clasifica las celdas por **proximidad de color** al color base (± `tol` por canal),
+/// para alcanzar también materiales con *grano* (el terreno varía su color; el agua no).
+/// Materiales de color parecido pueden mezclarse — es una aproximación de preview.
+pub struct EcuacionSim {
+    engine: FieldEngine,
+    /// Celdas del material (posición fija; se clasifican una vez).
+    cells: Vec<[u32; 3]>,
+    /// Color base del material (para modular el brillo).
+    base: [u8; 3],
+    /// Campo que tiñe el color.
+    vis: usize,
+    /// Rango del campo visible (para normalizar).
+    fmin: f32,
+    fmax: f32,
+    /// Último color emitido por celda (para subir sólo lo que cambió).
+    last: Vec<[u8; 3]>,
+}
+
+impl EcuacionSim {
+    /// Clasifica las celdas cercanas a `material` (± `tol` por canal), arma el motor de
+    /// campo sobre el grid y siembra una perturbación determinista por celda (para que
+    /// la ecuación arranque con estructura). `vis` es el campo que se pinta.
+    pub fn from_grid(
+        grid: &VoxelGrid,
+        material: [u8; 3],
+        tol: i32,
+        campos: Vec<FieldDef>,
+        vis: usize,
+    ) -> Self {
+        let dim = grid.dim();
+        let mut cells = Vec::new();
+        for z in 0..dim[2] {
+            for y in 0..dim[1] {
+                for x in 0..dim[0] {
+                    if let Some(c) = grid.get(x, y, z) {
+                        if c[3] > 0 && cerca([c[0], c[1], c[2]], material, tol) {
+                            cells.push([x, y, z]);
+                        }
+                    }
+                }
+            }
+        }
+        let vis = vis.min(campos.len().saturating_sub(1));
+        let (fmin, fmax) = campos.get(vis).map(|d| (d.min, d.max)).unwrap_or((0.0, 1.0));
+        let mut engine = FieldEngine::new(dim, campos);
+        let nf = engine.fields().len();
+        for &[x, y, z] in &cells {
+            for f in 0..nf {
+                let (mn, mx) = {
+                    let d = &engine.fields()[f];
+                    (d.min, d.max)
+                };
+                let h = hash01(x, y, z, f as u32);
+                engine.set(f as u16, x, y, z, mn + h * 0.6 * (mx - mn));
+            }
+        }
+        let last = vec![[0u8; 3]; cells.len()];
+        Self { engine, cells, base: material, vis, fmin, fmax, last }
+    }
+
+    /// Cantidad de celdas del material clasificadas.
+    pub fn cell_count(&self) -> usize {
+        self.cells.len()
+    }
+
+    /// Avanza un paso del campo y devuelve las celdas cuyo **color cambió**
+    /// `(pos, color)`, para subir sólo eso a la GPU. El color modula el brillo del
+    /// color base por el valor normalizado del campo visible (preserva el tono).
+    pub fn step(&mut self, program: &Program, params: &[f32]) -> Vec<([u32; 3], [u8; 3])> {
+        self.engine.step(program, params, 1.0);
+        let span = (self.fmax - self.fmin).max(1e-6);
+        let mut out = Vec::new();
+        for (i, &[x, y, z]) in self.cells.iter().enumerate() {
+            let t = ((self.engine.get(self.vis as u16, x, y, z) - self.fmin) / span).clamp(0.0, 1.0);
+            let k = 0.35 + 0.65 * t;
+            let col = [
+                (self.base[0] as f32 * k) as u8,
+                (self.base[1] as f32 * k) as u8,
+                (self.base[2] as f32 * k) as u8,
+            ];
+            if col != self.last[i] {
+                self.last[i] = col;
+                out.push(([x, y, z], col));
+            }
+        }
+        out
+    }
+}
+
+/// `true` si `c` está a ≤ `tol` de `base` en los tres canales.
+fn cerca(c: [u8; 3], base: [u8; 3], tol: i32) -> bool {
+    (c[0] as i32 - base[0] as i32).abs() <= tol
+        && (c[1] as i32 - base[1] as i32).abs() <= tol
+        && (c[2] as i32 - base[2] as i32).abs() <= tol
+}
+
+/// Hash determinista → `[0,1)` de una celda + índice de campo (sin azar; para sembrar).
+fn hash01(x: u32, y: u32, z: u32, f: u32) -> f32 {
+    let mut h = x
+        .wrapping_mul(0x9E37_79B1)
+        ^ y.wrapping_mul(0x85EB_CA77)
+        ^ z.wrapping_mul(0xC2B2_AE3D)
+        ^ f.wrapping_mul(0x27D4_EB2F);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2C1B_3C6D);
+    h ^= h >> 12;
+    (h & 0x00FF_FFFF) as f32 / (0x0100_0000 as f32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,6 +439,31 @@ mod tests {
         }
         g.reset_dirty();
         g
+    }
+
+    #[test]
+    fn ecuacion_sim_clasifica_y_recolorea() {
+        use crate::ecuacion::{Assign, Expr, FieldDef, Program, Symbols};
+        // Grid con un parche plano de un material (color exacto, como el agua).
+        let dim = [12, 1, 12];
+        let mut g = VoxelGrid::new(dim);
+        let mat = [120, 160, 80];
+        for z in 3..9 {
+            for x in 3..9 {
+                g.set(x, 0, z, mat);
+            }
+        }
+        g.reset_dirty();
+        let sym = Symbols { campos: vec!["t".into()], params: vec!["k".into()] };
+        let e = Expr::parse("k * lap(t)", &sym).unwrap();
+        let prog = Program::compile(&[Assign { campo: 0, expr: e }]);
+        let mut sim = EcuacionSim::from_grid(&g, mat, 8, vec![FieldDef::new("t", 0.0, 0.0, 1.0)], 0);
+        assert_eq!(sim.cell_count(), 36, "clasificó el parche 6×6");
+        let mut changed = 0;
+        for _ in 0..30 {
+            changed += sim.step(&prog, &[0.2]).len();
+        }
+        assert!(changed > 0, "la ecuación recoloreó celdas del material");
     }
 
     #[test]

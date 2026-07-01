@@ -1046,6 +1046,23 @@ impl Project {
         self.fluir_params(self.material_id_for(Material::Water)?)
     }
 
+    /// Si el material tiene una ley [`Ecuacion`](LeyKind::Ecuacion) (con herencia), su
+    /// `(campos, programa compilado, valores de parámetros)` — listo para correr con
+    /// [`EcuacionSim`](crate::EcuacionSim) sobre las celdas del material en el preview.
+    /// `None` si no tiene una, o si su fórmula no compila.
+    pub fn ecuacion_de_material(
+        &self,
+        material_id: u64,
+    ) -> Option<(Vec<FieldDef>, Program, Vec<f32>)> {
+        self.resolve_laws(material_id).into_iter().find_map(|k| match &k {
+            LeyKind::Ecuacion { campos, .. } => {
+                let prog = k.compile_ecuacion()?.ok()?;
+                Some((campos.clone(), prog, k.ecuacion_param_values()))
+            }
+            _ => None,
+        })
+    }
+
     /// Arma la [`BiomaPalette`] resuelta de un bioma (colores concretos para el render).
     pub fn bioma_palette(&self, b: &Bioma) -> BiomaPalette {
         let agua = self

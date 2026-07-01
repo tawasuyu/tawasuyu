@@ -11,7 +11,8 @@ use llimphi_3d::glam::{Mat4, Vec3, Vec4};
 use llimphi_3d::{Atmosphere, Camera3d, Renderer3d, Scene3d, Vertex3d, VoxelGrid, VoxelRenderer};
 use llimphi_ui::llimphi_hal::wgpu;
 use llimphi_voxel::{
-    CharSpec, Clip, GrowthSim, Habitante, MundoRender, WaterSim, CELL_WATER, SCENE_SUN,
+    CharSpec, Clip, EcuacionSim, FieldDef, GrowthSim, Habitante, MundoRender, Program, WaterSim,
+    CELL_WATER, SCENE_SUN,
 };
 
 /// Formato de la textura intermedia de Llimphi (target de `gpu_paint_with`).
@@ -46,6 +47,9 @@ pub struct WorldPreview {
     sim: Option<WaterSim>,
     /// Crecimiento de plantas en curso (ley Crecer), si está activo.
     growth: Option<GrowthSim>,
+    /// Ley autorada (Ecuacion) corriendo sobre un material del mundo, si está activa:
+    /// recolorea sus celdas por el campo. Ver [`Self::ensure_ecuacion`] / [`Self::ecuacion_step`].
+    ecuacion: Option<EcuacionSim>,
     /// Bandada de habitantes (conducta) deambulando sobre el grid, cada uno con el
     /// cuerpo del Ser que representa. Vacía = sin vida.
     manada: Vec<(Habitante, CharSpec)>,
@@ -77,6 +81,7 @@ impl WorldPreview {
             origin: [0, 0],
             sim: None,
             growth: None,
+            ecuacion: None,
             manada: Vec::new(),
             pick: None,
             actor_r: Vec::new(),
@@ -211,6 +216,35 @@ impl WorldPreview {
         voxel.sync(queue, grid);
     }
 
+    /// Arranca una **ley autorada** (Ecuacion) sobre las celdas del material `color`
+    /// (± `tol`), si no hay una ya corriendo. `campos` define el estado y `vis` el campo
+    /// que tiñe el color. No mueve celdas: las recolorea.
+    pub fn ensure_ecuacion(&mut self, color: [u8; 3], tol: i32, campos: &[FieldDef], vis: usize) {
+        if self.ecuacion.is_none() {
+            self.ecuacion = Some(EcuacionSim::from_grid(&self.grid, color, tol, campos.to_vec(), vis));
+        }
+    }
+
+    /// Detiene la ley autorada (el próximo `rebuild_if` repone los colores originales).
+    pub fn clear_ecuacion(&mut self) {
+        self.ecuacion = None;
+    }
+
+    /// Avanza un paso de la ley autorada y **sube sólo las celdas recoloreadas** a la
+    /// GPU. No-op si no hay una corriendo.
+    pub fn ecuacion_step(&mut self, queue: &wgpu::Queue, program: &Program, params: &[f32]) {
+        let Self { ecuacion, grid, voxel, .. } = self;
+        let Some(sim) = ecuacion else { return };
+        let changes = sim.step(program, params);
+        if changes.is_empty() {
+            return;
+        }
+        for (pos, color) in changes {
+            grid.set(pos[0], pos[1], pos[2], color);
+        }
+        voxel.sync(queue, grid);
+    }
+
     /// Arranca la **simulación de agua** (ley Fluir) desde el grid actual, si no hay
     /// una ya corriendo. `agua` es el color con que se identifican/pintan las celdas;
     /// `(gravedad, horizontal)` son los parámetros de la ley del material líquido.
@@ -275,6 +309,7 @@ impl WorldPreview {
             self.origin = [0, 0]; // centrado en el origen
             self.sim = None; // el grid se rehízo: cualquier simulación queda obsoleta
             self.growth = None;
+            self.ecuacion = None;
             self.manada.clear();
         }
     }

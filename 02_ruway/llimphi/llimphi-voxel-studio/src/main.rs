@@ -57,6 +57,9 @@ const DT: f32 = 1.0 / 30.0;
 const LAB_DIM: u32 = 64;
 /// Sub‑pasos del laboratorio por cuadro (la reacción‑difusión evoluciona lento).
 const LAB_SUBSTEPS: usize = 4;
+/// Tolerancia por canal para clasificar las celdas de un material en el mundo (el
+/// terreno lleva grano que varía el color base; el agua no). Ver [`EcuacionSim`].
+const ECUACION_TOL: i32 = 28;
 
 /// **Laboratorio de una ley `Ecuacion`**: un campo escalar 2D corriendo la ecuación
 /// autorada, para *ver* qué hace sin depender de materiales ni biomas. El heatmap del
@@ -1704,6 +1707,23 @@ fn canvas_3d(model: &Model) -> View<Msg> {
             .crecer_velocidad(o.material)
             .map(|v| (model.project.resolve_material(o.material).color, v))
     });
+    // Ley autorada (Ecuacion): el primer material de la escena que la tenga corre sobre
+    // sus celdas (recoloreándolas por el campo). `(color, tol, campos, programa, params, vis)`.
+    let ecuacion = {
+        let b = &mr.bioma;
+        let mut ids = vec![b.ground, b.cliff];
+        if let Some(p) = b.peak {
+            ids.push(p);
+        }
+        ids.extend(b.objetos.iter().map(|o| o.material));
+        ids.into_iter().find_map(|id| {
+            model.project.ecuacion_de_material(id).map(|(campos, prog, params)| {
+                let color = model.project.resolve_material(id).color;
+                let vis = campos.len().saturating_sub(1);
+                (color, campos, prog, params, vis)
+            })
+        })
+    };
     // Pobladores del bioma: cada SereUso → unos cuantos habitantes (por probabilidad).
     let pobladores: Vec<(CharSpec, usize)> = mr
         .bioma
@@ -1852,12 +1872,17 @@ fn canvas_3d(model: &Model) -> View<Msg> {
                     p.ensure_growth(queue, col, vel);
                     p.growth_step(queue);
                 }
+                if let Some((color, campos, prog, params, vis)) = &ecuacion {
+                    p.ensure_ecuacion(*color, ECUACION_TOL, campos, *vis);
+                    p.ecuacion_step(queue, prog, params);
+                }
                 if !pobladores.is_empty() {
                     p.ensure_manada(&pobladores);
                 }
             } else {
                 p.clear_sim();
                 p.clear_growth();
+                p.clear_ecuacion();
                 p.clear_manada();
             }
             let camera = Camera3d::orbit(orbit_center(dim), yaw, pitch, dist);
