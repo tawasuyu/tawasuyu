@@ -513,7 +513,17 @@ impl DrmState {
                     // izquierdo sobre una teselada sólo hacía swap sin moverse en
                     // vivo, y daba la sensación de que «win+drag no mueve».)
                     let (x, y) = self.app.pointer_loc;
-                    let hit = self.window_at(x, y);
+                    // Si hay una layer surface INTERACTIVA (con input-region) bajo el
+                    // puntero —el panel/drawer de pata abierto, una barra— el
+                    // Super+arrastre pertenece a esa layer y NO debe agarrar la ventana
+                    // de atrás (antes movía la ventana «a través» del panel). Con el
+                    // drawer cerrado la región es vacía → `layer_under` da None → el
+                    // gesto sí mueve la ventana, como corresponde.
+                    let hit = if super_held && self.app.layer_under(x, y).is_some() {
+                        None
+                    } else {
+                        self.window_at(x, y)
+                    };
                     let mode = match (button, hit) {
                         (BTN_LEFT, Some(_)) if super_held => Some(DragMode::Move),
                         (BTN_RIGHT, Some(_)) if super_held => Some(DragMode::Resize),
