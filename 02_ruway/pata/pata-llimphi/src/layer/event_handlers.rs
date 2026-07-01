@@ -94,7 +94,18 @@ impl CompositorHandler for LayerApp {
 }
 
 impl LayerShellHandler for LayerApp {
-    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
+    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
+        use smithay_client_toolkit::shell::WaylandSurface;
+        let pi = self.panel_de(layer.wl_surface());
+        diag!("pata diag · CLOSED panel={pi:?} drawer_pi={:?}", self.drawer_pi);
+        // Si el compositor cierra EL DRAWER (surface de runtime), NO matamos la app:
+        // sólo soltamos el drawer para que se pueda recrear al reabrir un diente.
+        // (En arje-DRM mirada manda `closed` al resetear el output; matar pata ahí
+        // hacía que el diente "no hiciera nada" y el mouse atravesara.)
+        if pi.is_some() && pi == self.drawer_pi {
+            self.destroy_drawer();
+            return;
+        }
         self.exit = true;
     }
 

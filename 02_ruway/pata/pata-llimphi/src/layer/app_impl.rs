@@ -569,6 +569,10 @@ impl LayerApp {
         if want_si == self.drawer_si {
             return; // estable (mismo sidebar, o ninguno): el contenido lo refresca `dirty`.
         }
+        diag!(
+            "pata diag · reconcile_drawer want_si={want_si:?} drawer_si={:?} → recrear",
+            self.drawer_si
+        );
         // Cambió el sidebar abierto (o se cerró): destruir el drawer viejo…
         self.destroy_drawer();
         // …y, si hay uno abierto ahora, crear el suyo.
@@ -648,12 +652,20 @@ impl LayerApp {
         });
         self.drawer_pi = Some(self.panels.len() - 1);
         self.drawer_si = Some(si);
+        diag!(
+            "pata diag · create_drawer si={si} pi={} pw={pw} margin=(t{},r{},b{},l{}) anchor={anchor:?}",
+            self.panels.len() - 1,
+            margins.0,
+            margins.1,
+            margins.2,
+            margins.3
+        );
     }
 
     /// Destruye la surface del drawer viva (si hay). El drawer es SIEMPRE el último
     /// panel (único creado en runtime, ≤ 1 a la vez), así que `pop` no corre los
     /// índices de los paneles fijos (`osd_pi`/`tooltip_pi`/`menu_panel`/…).
-    fn destroy_drawer(&mut self) {
+    pub(super) fn destroy_drawer(&mut self) {
         let Some(pi) = self.drawer_pi.take() else { return };
         self.drawer_si = None;
         if pi >= self.panels.len() {
