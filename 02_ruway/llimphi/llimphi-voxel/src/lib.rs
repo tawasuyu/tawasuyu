@@ -47,7 +47,7 @@ pub use rig::{Andar, Andares, Eje, Movimiento, Osc, Rig, RigPose, Segmento, Slot
 pub use sim::{CellChange, GrowthSim, WaterSim, CELL_AIR, CELL_WATER};
 pub use studio::{
     window_origin_for_cast, world_dim, ActorKeySpec, ActorSpec, CharSpec, Ley, LeyKind, LeyUso,
-    MatRole, MaterialDef, Mundo, MundoRender, Project, SceneSpec, ShotKind, ShotSpec,
+    MatRole, MaterialDef, Mundo, MundoRender, ParamDef, Project, SceneSpec, ShotKind, ShotSpec,
     PREVIEW_DIM_XZ, SCENE_SUN, SCENE_WINDOW_STEP,
 };
 pub use terrain::{column_height, fill_terrain_window, terrain};

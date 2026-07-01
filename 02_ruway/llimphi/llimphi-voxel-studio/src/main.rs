@@ -27,13 +27,15 @@ use llimphi_ui::{
 };
 use llimphi_voxel::{
     window_origin_for_cast, world_dim, ActorKeySpec, ActorScript, ActorSpec, Age, Bioma,
-    BiomaPalette, CharSpec, Clip, Forma, LeyKind, LeyUso, MatRole, Material, MaterialDef, Mundo,
-    MundoRender, Project, SceneSpec, ShotKind, ShotSpec, PREVIEW_DIM_XZ,
+    BiomaPalette, CharSpec, Clip, FieldDef, FieldEngine, Forma, LeyKind, LeyUso, MatRole, Material,
+    MaterialDef, Mundo, MundoRender, ParamDef, Program, Project, SceneSpec, ShotKind, ShotSpec,
+    PREVIEW_DIM_XZ,
 };
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_dock_rail::{dock_rail_view_side, DockRailItem, DockRailPalette, DockRailSide};
 use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
+use llimphi_image::{from_rgba8, Image};
 
 mod ai;
 mod preview;
@@ -47,6 +49,97 @@ use preview::WorldPreview;
 const PROJECT_PATH: &str = "voxel-studio.ron";
 /// Paso de tiempo de la reproducción de escenas (~30 fps).
 const DT: f32 = 1.0 / 30.0;
+
+/// Lado de la grilla 2D del **laboratorio de leyes** (petri dish del nivel Leyes).
+const LAB_DIM: u32 = 64;
+/// Sub‑pasos del laboratorio por cuadro (la reacción‑difusión evoluciona lento).
+const LAB_SUBSTEPS: usize = 4;
+
+/// **Laboratorio de una ley `Ecuacion`**: un campo escalar 2D corriendo la ecuación
+/// autorada, para *ver* qué hace sin depender de materiales ni biomas. El heatmap del
+/// campo visible se pinta en el centro del nivel Leyes. Se reconstruye cuando cambia
+/// la ley (`ley_id`) o su estructura (`gen`); los parámetros se leen en vivo al pasar.
+struct LawLab {
+    /// Ley que refleja.
+    ley_id: u64,
+    /// Generación estructural con la que se construyó (campos/fuentes).
+    gen: u64,
+    /// Estado de los campos.
+    engine: FieldEngine,
+    /// Programa compilado (o el error de parseo, para mostrarlo).
+    program: Result<Program, String>,
+    /// Campo que se visualiza en el heatmap.
+    vis: usize,
+}
+
+impl LawLab {
+    /// Construye el laboratorio para una ley `Ecuacion` y lo siembra.
+    fn build(ley_id: u64, gen: u64, campos: &[FieldDef], program: Result<Program, String>, vis: usize) -> Self {
+        let mut engine = FieldEngine::new([LAB_DIM, 1, LAB_DIM], campos.to_vec());
+        seed_engine(&mut engine);
+        let vis = vis.min(campos.len().saturating_sub(1));
+        Self { ley_id, gen, engine, program, vis }
+    }
+
+    /// Reinicia los campos a su siembra (sin recompilar).
+    fn reseed(&mut self) {
+        seed_engine(&mut self.engine);
+    }
+
+    /// Avanza `LAB_SUBSTEPS` sub‑pasos si el programa compiló.
+    fn step(&mut self, params: &[f32]) {
+        if let Ok(prog) = &self.program {
+            for _ in 0..LAB_SUBSTEPS {
+                self.engine.step(prog, params, 1.0);
+            }
+        }
+    }
+}
+
+/// (Re)construye el laboratorio si la ley seleccionada es una `Ecuacion` y cambió
+/// (por id o por generación estructural). Compila **sólo al reconstruir**, no cada
+/// cuadro. Deja `model.lab = None` si el nivel no tiene una ley por ecuación.
+fn ensure_lab(model: &mut Model) {
+    let id = model.sel[0];
+    let is_ec = matches!(
+        model.project.ley(id).map(|l| &l.kind),
+        Some(LeyKind::Ecuacion { campos, .. }) if !campos.is_empty()
+    );
+    if !is_ec {
+        model.lab = None;
+        return;
+    }
+    let need = match &model.lab {
+        Some(lab) => lab.ley_id != id || lab.gen != model.lab_gen,
+        None => true,
+    };
+    if !need {
+        return;
+    }
+    let (campos, program) = match &model.project.ley(id).unwrap().kind {
+        k @ LeyKind::Ecuacion { campos, .. } => (campos.clone(), k.compile_ecuacion().unwrap()),
+        _ => unreachable!("is_ec ya lo garantiza"),
+    };
+    let vis = model.lab.as_ref().map(|x| x.vis).unwrap_or(0);
+    model.lab = Some(LawLab::build(id, model.lab_gen, &campos, program, vis));
+}
+
+/// Siembra un motor de campo: cada campo a su `init` + una mancha central (para
+/// disparar difusión/reacción). La mancha = 60 % del rango, en un cuadro central.
+fn seed_engine(engine: &mut FieldEngine) {
+    let dim = engine.dim();
+    let defs: Vec<(f32, f32)> = engine.fields().iter().map(|d| (d.min, d.max)).collect();
+    let (cx, cz) = (dim[0] / 2, dim[2] / 2);
+    let r = (dim[0] / 8).max(2);
+    for (f, (mn, mx)) in defs.iter().enumerate() {
+        let blob = mn + 0.6 * (mx - mn);
+        for z in cz.saturating_sub(r)..(cz + r).min(dim[2]) {
+            for x in cx.saturating_sub(r)..(cx + r).min(dim[0]) {
+                engine.set(f as u16, x, 0, z, blob);
+            }
+        }
+    }
+}
 
 // =============================================================================
 //  Niveles de composición (rail izquierdo)
@@ -175,6 +268,17 @@ enum Msg {
     // Leyes.
     CycleLeyKind,
     SetLeyParam(usize, f32),
+    // Leyes por ecuación (autorables).
+    LeyPreset,
+    SetEcuParam(usize, f32),
+    FormulaFocus(usize),
+    FormulaKey(KeyEvent),
+    AddCampo,
+    RemoveCampo,
+    AddEcuParam,
+    RemoveEcuParam,
+    CycleLabField,
+    ReseedLab,
     // Materiales.
     CycleMatRole,
     SetMatColor(usize, f32),
@@ -298,6 +402,15 @@ struct Model {
     rng: u32,
     /// Decisión global: dientes DENTRO (overlay) o FUERA (franja reservada).
     dientes_outside: bool,
+    /// Laboratorio de la ley `Ecuacion` seleccionada (nivel Leyes). Perezoso.
+    lab: Option<LawLab>,
+    /// Generación estructural de la ley en edición: bump al cambiar campos/fórmulas
+    /// (para reconstruir el laboratorio, sin resetear al tocar sólo parámetros).
+    lab_gen: u64,
+    /// Edición de una fórmula: buffer compartido + foco + campo objetivo.
+    formula_input: TextInputState,
+    formula_focused: bool,
+    formula_target: usize,
 }
 
 impl Model {
@@ -407,6 +520,9 @@ impl App for Studio {
         if model.name_focused {
             return Some(Msg::RenameKey(ev.clone()));
         }
+        if model.formula_focused {
+            return Some(Msg::FormulaKey(ev.clone()));
+        }
         if model.seed_focused {
             return Some(Msg::SeedKey(ev.clone()));
         }
@@ -478,6 +594,104 @@ impl App for Studio {
             Msg::SetLeyParam(i, v) => {
                 if let Some(l) = model.project.leyes.iter_mut().find(|x| x.id == model.sel[0]) {
                     l.kind.set_param(i, v);
+                }
+            }
+            Msg::LeyPreset => {
+                // Cicla la ley `Ecuacion` seleccionada por un catálogo de leyes de
+                // fábrica (autoradas, editables). Cambio estructural → reconstruye el lab.
+                if let Some(l) = sel_ley_mut(&mut model) {
+                    if matches!(l.kind, LeyKind::Ecuacion { .. }) {
+                        l.kind = next_preset(&l.kind);
+                        model.formula_focused = false;
+                        model.lab_gen += 1;
+                    }
+                }
+            }
+            Msg::SetEcuParam(i, v) => {
+                if let Some(l) = sel_ley_mut(&mut model) {
+                    l.kind.set_ecuacion_param(i, v);
+                }
+            }
+            Msg::FormulaFocus(i) => {
+                let src = sel_ley(&model)
+                    .and_then(|l| match &l.kind {
+                        LeyKind::Ecuacion { fuentes, .. } => fuentes.get(i).cloned(),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                model.formula_input.set_text(src);
+                model.formula_focused = true;
+                model.formula_target = i;
+                model.name_focused = false;
+                model.seed_focused = false;
+                model.ai_focused = false;
+            }
+            Msg::FormulaKey(ev) => {
+                // Enter confirma (desenfoca); el resto edita el buffer y se escribe en vivo.
+                if ev.state == KeyState::Pressed && matches!(&ev.key, Key::Named(NamedKey::Enter)) {
+                    model.formula_focused = false;
+                } else {
+                    model.formula_input.apply_key(&ev);
+                    let txt = model.formula_input.text();
+                    let target = model.formula_target;
+                    if let Some(l) = sel_ley_mut(&mut model) {
+                        if let LeyKind::Ecuacion { fuentes, .. } = &mut l.kind {
+                            if let Some(f) = fuentes.get_mut(target) {
+                                *f = txt;
+                            }
+                        }
+                    }
+                    model.lab_gen += 1;
+                }
+            }
+            Msg::AddCampo => {
+                if let Some(l) = sel_ley_mut(&mut model) {
+                    if let LeyKind::Ecuacion { campos, fuentes, .. } = &mut l.kind {
+                        let name = format!("c{}", campos.len());
+                        campos.push(FieldDef::new(name, 0.0, 0.0, 1.0));
+                        fuentes.push("0".to_string());
+                        model.lab_gen += 1;
+                    }
+                }
+            }
+            Msg::RemoveCampo => {
+                if let Some(l) = sel_ley_mut(&mut model) {
+                    if let LeyKind::Ecuacion { campos, fuentes, .. } = &mut l.kind {
+                        if campos.len() > 1 {
+                            campos.pop();
+                            fuentes.pop();
+                            model.formula_focused = false;
+                            model.lab_gen += 1;
+                        }
+                    }
+                }
+            }
+            Msg::AddEcuParam => {
+                if let Some(l) = sel_ley_mut(&mut model) {
+                    if let LeyKind::Ecuacion { params, .. } = &mut l.kind {
+                        let name = format!("p{}", params.len());
+                        params.push(ParamDef::new(name, 0.1, 0.0, 1.0));
+                        model.lab_gen += 1;
+                    }
+                }
+            }
+            Msg::RemoveEcuParam => {
+                if let Some(l) = sel_ley_mut(&mut model) {
+                    if let LeyKind::Ecuacion { params, .. } = &mut l.kind {
+                        params.pop();
+                        model.lab_gen += 1;
+                    }
+                }
+            }
+            Msg::CycleLabField => {
+                if let Some(lab) = &mut model.lab {
+                    let n = lab.engine.fields().len().max(1);
+                    lab.vis = (lab.vis + 1) % n;
+                }
+            }
+            Msg::ReseedLab => {
+                if let Some(lab) = &mut model.lab {
+                    lab.reseed();
                 }
             }
             Msg::CycleMatRole => {
@@ -871,7 +1085,12 @@ impl App for Studio {
             Msg::ToggleSim => {
                 model.simulating = !model.simulating;
                 model.gen += 1; // repone terreno fresco y reinicia la sim limpia
-                model.status = if model.simulating { "simulando agua…".into() } else { "agua estática".into() };
+                model.status = match (model.level, model.simulating) {
+                    (Level::Leyes, true) => "corriendo la ley…".into(),
+                    (Level::Leyes, false) => "ley en pausa".into(),
+                    (_, true) => "simulando agua…".into(),
+                    (_, false) => "agua estática".into(),
+                };
             }
             Msg::Orbit(dx, dy) => {
                 model.yaw -= dx * 0.008;
@@ -987,6 +1206,16 @@ impl App for Studio {
                     }
                 } else if model.level == Level::Seres {
                     model.time += DT; // turntable + respiración
+                } else if model.level == Level::Leyes {
+                    ensure_lab(&mut model);
+                    if model.simulating {
+                        let params = sel_ley(&model)
+                            .map(|l| l.kind.ecuacion_param_values())
+                            .unwrap_or_default();
+                        if let Some(lab) = &mut model.lab {
+                            lab.step(&params);
+                        }
+                    }
                 }
             }
         }
@@ -1197,12 +1426,8 @@ fn cell(child: View<Msg>) -> View<Msg> {
 // =============================================================================
 
 fn center(model: &Model) -> View<Msg> {
-    let theme = &model.theme;
     let inner = match model.level {
-        Level::Leyes => placeholder_2d(
-            "Las Leyes son comportamientos (sin simular aún). Editá sus parámetros a la derecha.",
-            theme,
-        ),
+        Level::Leyes => law_lab_view(model),
         Level::Materiales => material_swatch(model),
         _ => canvas_3d(model),
     };
@@ -1231,6 +1456,92 @@ fn placeholder_2d(text: &str, theme: &Theme) -> View<Msg> {
     })
     .text(text.to_string(), 16.0, theme.fg_muted)
     .max_lines(4)])
+}
+
+/// Centro del nivel Leyes: el **laboratorio** — heatmap del campo visible de la ley
+/// corriendo la ecuación, o el error de parseo, o una guía si no hay ley por ecuación.
+fn law_lab_view(model: &Model) -> View<Msg> {
+    let theme = &model.theme;
+    let Some(lab) = &model.lab else {
+        return placeholder_2d(
+            "Elegí una ley por ecuación (botón «preset» a la derecha) y editá su fórmula. ▶ para simular.",
+            theme,
+        );
+    };
+    if let Err(err) = &lab.program {
+        return placeholder_2d(&format!("La fórmula no compila:\n{err}"), theme);
+    }
+    let field_name = lab.engine.fields().get(lab.vis).map(|f| f.name.clone()).unwrap_or_default();
+    let estado = if model.simulating { "▶ corriendo" } else { "▮ en pausa" };
+    let overlay = View::new(Style {
+        position: Position::Absolute,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        padding: pad(12.0, 10.0),
+        ..Default::default()
+    })
+    .text(format!("campo «{field_name}»  ·  {LAB_DIM}²  ·  {estado}"), 13.0, theme.fg_muted);
+    View::new(Style {
+        position: Position::Absolute,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(llimphi_ui::llimphi_layout::taffy::prelude::JustifyContent::Center),
+        padding: pad(24.0, 24.0),
+        ..Default::default()
+    })
+    .children(vec![
+        View::new(Style {
+            size: Size { width: percent(0.82_f32), height: percent(0.82_f32) },
+            ..Default::default()
+        })
+        .image(heatmap_image(lab)),
+        overlay,
+    ])
+}
+
+/// Heatmap RGBA del campo visible del laboratorio (rango del campo → rampa magma).
+fn heatmap_image(lab: &LawLab) -> Image {
+    let f = lab.vis as u16;
+    let (mn, mx) = lab.engine.fields().get(lab.vis).map(|d| (d.min, d.max)).unwrap_or((0.0, 1.0));
+    let span = (mx - mn).max(1e-6);
+    let mut rgba = vec![0u8; (LAB_DIM * LAB_DIM * 4) as usize];
+    for z in 0..LAB_DIM {
+        for x in 0..LAB_DIM {
+            let t = ((lab.engine.get(f, x, 0, z) - mn) / span).clamp(0.0, 1.0);
+            let [r, g, b] = ramp(t);
+            let i = ((z * LAB_DIM + x) * 4) as usize;
+            rgba[i] = r;
+            rgba[i + 1] = g;
+            rgba[i + 2] = b;
+            rgba[i + 3] = 255;
+        }
+    }
+    from_rgba8(rgba, LAB_DIM, LAB_DIM)
+}
+
+/// Rampa de color tipo *magma* (negro → púrpura → naranja → crema) para `t∈[0,1]`.
+fn ramp(t: f32) -> [u8; 3] {
+    const STOPS: [(f32, [f32; 3]); 4] = [
+        (0.0, [8.0, 6.0, 30.0]),
+        (0.4, [92.0, 22.0, 110.0]),
+        (0.72, [222.0, 92.0, 58.0]),
+        (1.0, [250.0, 232.0, 158.0]),
+    ];
+    let t = t.clamp(0.0, 1.0);
+    let mut out = STOPS[STOPS.len() - 1].1;
+    for w in STOPS.windows(2) {
+        let (t0, c0) = w[0];
+        let (t1, c1) = w[1];
+        if t <= t1 {
+            let k = ((t - t0) / (t1 - t0).max(1e-6)).clamp(0.0, 1.0);
+            out = [
+                c0[0] + (c1[0] - c0[0]) * k,
+                c0[1] + (c1[1] - c0[1]) * k,
+                c0[2] + (c1[2] - c0[2]) * k,
+            ];
+            break;
+        }
+    }
+    [out[0] as u8, out[1] as u8, out[2] as u8]
 }
 
 /// Swatch grande del color resuelto del material seleccionado.
@@ -1489,14 +1800,87 @@ fn ley_editor(model: &Model) -> Vec<View<Msg>> {
     let mut v = vec![
         section_title("LEY", theme),
         button_view(format!("tipo: {}", l.kind.label()), &btn, Msg::CycleLeyKind),
-        spacer(6.0),
-        section_title("PARÁMETROS", theme),
     ];
-    if l.kind.params().is_empty() {
-        v.push(body_text("este tipo no tiene parámetros".into(), theme.fg_placeholder, theme));
-    }
-    for (i, (name, value, min, max)) in l.kind.params().into_iter().enumerate() {
-        v.push(slider_view(name, value, min, max, &sp, move |_p, dv| Some(Msg::SetLeyParam(i, value + dv))));
+    match &l.kind {
+        // --- Ley autorable: editor de ecuaciones + laboratorio -----------------
+        LeyKind::Ecuacion { campos, fuentes, .. } => {
+            v.push(spacer(4.0));
+            v.push(button_view("↻ preset (catálogo)", &btn, Msg::LeyPreset));
+            v.push(spacer(6.0));
+            v.push(button_view(
+                if model.simulating { "⏸ pausar" } else { "▶ simular" },
+                &btn,
+                Msg::ToggleSim,
+            ));
+            v.push(spacer(4.0));
+            v.push(button_view("⟲ resembrar", &btn, Msg::ReseedLab));
+            if campos.len() > 1 {
+                let vis = model.lab.as_ref().map(|x| x.vis).unwrap_or(0);
+                let vname = campos.get(vis).map(|c| c.name.as_str()).unwrap_or("?");
+                v.push(spacer(4.0));
+                v.push(button_view(format!("ver campo: {vname}"), &btn, Msg::CycleLabField));
+            }
+            // Error de compilación, si la fórmula no parsea.
+            if let Some(Err(err)) = l.kind.compile_ecuacion() {
+                v.push(spacer(6.0));
+                v.push(body_text(format!("⚠ {err}"), Color::from_rgba8(232, 128, 96, 255), theme));
+            }
+            v.push(spacer(8.0));
+            v.push(section_title("ECUACIONES  (Δcampo/dt)", theme));
+            for (i, campo) in campos.iter().enumerate() {
+                v.push(body_text(format!("Δ{}/dt =", campo.name), theme.fg_muted, theme));
+                let editing = model.formula_focused && model.formula_target == i;
+                if editing {
+                    v.push(text_input_view(
+                        &model.formula_input,
+                        "fórmula…",
+                        true,
+                        &TextInputPalette::from_theme(theme),
+                        Msg::FormulaFocus(i),
+                    ));
+                } else {
+                    let src = fuentes.get(i).cloned().unwrap_or_default();
+                    let label = if src.is_empty() { "(tocar para editar)".to_string() } else { src };
+                    v.push(button_view(label, &btn, Msg::FormulaFocus(i)));
+                }
+                v.push(spacer(4.0));
+            }
+            v.push(button_view("+ campo", &btn, Msg::AddCampo));
+            if campos.len() > 1 {
+                v.push(spacer(4.0));
+                v.push(button_view("− campo", &btn, Msg::RemoveCampo));
+            }
+            v.push(spacer(8.0));
+            v.push(section_title("PARÁMETROS", theme));
+            for (i, (name, value, min, max)) in l.kind.ecuacion_params().into_iter().enumerate() {
+                v.push(slider_view(name, value, min, max, &sp, move |_p, dv| {
+                    Some(Msg::SetEcuParam(i, value + dv))
+                }));
+            }
+            v.push(spacer(4.0));
+            v.push(button_view("+ parámetro", &btn, Msg::AddEcuParam));
+            v.push(spacer(4.0));
+            v.push(button_view("− parámetro", &btn, Msg::RemoveEcuParam));
+            v.push(spacer(8.0));
+            v.push(body_text(
+                "términos: lap(c) · avg(c) · min6(c)/max6(c)/sum6(c) · abajo(c)… · clamp/min/max · < > · dt".into(),
+                theme.fg_placeholder,
+                theme,
+            ));
+        }
+        // --- Leyes nativas (Fluir/Crecer): sliders cableados -------------------
+        _ => {
+            v.push(spacer(6.0));
+            v.push(section_title("PARÁMETROS", theme));
+            if l.kind.params().is_empty() {
+                v.push(body_text("este tipo no tiene parámetros".into(), theme.fg_placeholder, theme));
+            }
+            for (i, (name, value, min, max)) in l.kind.params().into_iter().enumerate() {
+                v.push(slider_view(name, value, min, max, &sp, move |_p, dv| {
+                    Some(Msg::SetLeyParam(i, value + dv))
+                }));
+            }
+        }
     }
     v
 }
@@ -2062,6 +2446,81 @@ fn sel_material_mut(model: &mut Model) -> Option<&mut MaterialDef> {
     let id = model.sel[1];
     model.project.materiales.iter_mut().find(|x| x.id == id)
 }
+fn sel_ley(model: &Model) -> Option<&llimphi_voxel::Ley> {
+    model.project.ley(model.sel[0])
+}
+fn sel_ley_mut(model: &mut Model) -> Option<&mut llimphi_voxel::Ley> {
+    let id = model.sel[0];
+    model.project.leyes.iter_mut().find(|x| x.id == id)
+}
+
+/// Catálogo de **leyes de fábrica** por ecuación (autoradas, editables). Ciclar
+/// reemplaza la `Ecuacion` actual por la siguiente del catálogo. Todas verificadas
+/// como comportamientos vivos por los tests de `llimphi-voxel`.
+fn law_presets() -> Vec<(&'static str, LeyKind)> {
+    vec![
+        ("difusión", LeyKind::ecuacion_default()),
+        (
+            "reacción-difusión",
+            LeyKind::Ecuacion {
+                campos: vec![
+                    FieldDef::new("u", 1.0, 0.0, 1.0),
+                    FieldDef::new("v", 0.0, 0.0, 1.0),
+                ],
+                params: vec![
+                    ParamDef::new("Du", 0.16, 0.0, 1.0),
+                    ParamDef::new("Dv", 0.08, 0.0, 1.0),
+                    ParamDef::new("F", 0.06, 0.0, 0.1),
+                    ParamDef::new("k", 0.062, 0.0, 0.1),
+                ],
+                fuentes: vec![
+                    "Du * lap(u) - u * v * v + F * (1 - u)".into(),
+                    "Dv * lap(v) + u * v * v - (F + k) * v".into(),
+                ],
+            },
+        ),
+        (
+            "calor",
+            LeyKind::Ecuacion {
+                campos: vec![FieldDef::new("t", 0.0, 0.0, 1.0)],
+                params: vec![ParamDef::new("difus", 0.2, 0.0, 0.25)],
+                fuentes: vec!["difus * lap(t)".into()],
+            },
+        ),
+        (
+            "crecer",
+            LeyKind::Ecuacion {
+                campos: vec![FieldDef::new("h", 0.0, 0.0, 1.0)],
+                params: vec![ParamDef::new("vel", 0.05, 0.0, 0.3), ParamDef::new("tope", 0.8, 0.0, 1.0)],
+                fuentes: vec!["vel * (h < tope)".into()],
+            },
+        ),
+    ]
+}
+
+/// La siguiente ley del catálogo tras la actual (por label del preset actual).
+fn next_preset(actual: &LeyKind) -> LeyKind {
+    let presets = law_presets();
+    // Encuentra el preset cuya estructura de campos coincide con la actual; si no,
+    // arranca del primero. Ciclo simple por índice.
+    let idx = presets
+        .iter()
+        .position(|(_, k)| leyes_misma_forma(k, actual))
+        .map(|i| (i + 1) % presets.len())
+        .unwrap_or(0);
+    presets[idx].1.clone()
+}
+
+/// Dos leyes `Ecuacion` "tienen la misma forma" si coinciden los nombres de campos
+/// (heurística para ubicar el preset actual al ciclar).
+fn leyes_misma_forma(a: &LeyKind, b: &LeyKind) -> bool {
+    match (a, b) {
+        (LeyKind::Ecuacion { campos: ca, .. }, LeyKind::Ecuacion { campos: cb, .. }) => {
+            ca.len() == cb.len() && ca.iter().zip(cb).all(|(x, y)| x.name == y.name)
+        }
+        _ => false,
+    }
+}
 fn sel_sere<'a>(model: &'a Model) -> Option<&'a CharSpec> {
     let id = model.sel[2];
     model.project.seres.iter().find(|x| x.id == id)
@@ -2247,6 +2706,11 @@ pub(crate) fn demo_model() -> Model {
         key_sel: 0,
         rng: 0x1234_5678,
         dientes_outside: wawa_config::WawaConfig::load().dientes_outside,
+        lab: None,
+        lab_gen: 1,
+        formula_input: TextInputState::new(),
+        formula_focused: false,
+        formula_target: 0,
         project,
     };
     reselect_all(&mut model);
@@ -2297,4 +2761,54 @@ fn main() {
         return;
     }
     llimphi_ui::run::<Studio>();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// El laboratorio corre una ley autorada del catálogo y forma estructura: el campo
+    /// visible desarrolla rango espacial (certifica símbolos + params + programa + step,
+    /// la cadena de app completa, sin GPU ni screenshot).
+    #[test]
+    fn lab_corre_ley_del_catalogo_y_forma_patron() {
+        let ley = law_presets().into_iter().find(|(n, _)| *n == "reacción-difusión").unwrap().1;
+        let LeyKind::Ecuacion { campos, .. } = &ley else { panic!("es Ecuacion") };
+        let prog = ley.compile_ecuacion().unwrap().expect("compila");
+        let mut lab = LawLab::build(1, 1, campos, Ok(prog), 1);
+        let params = ley.ecuacion_param_values();
+        for _ in 0..80 {
+            lab.step(&params); // 80 · LAB_SUBSTEPS pasos
+        }
+        let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+        for z in 0..LAB_DIM {
+            for x in 0..LAB_DIM {
+                let v = lab.engine.get(1, x, 0, z);
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+        }
+        assert!(hi - lo > 0.05, "la ley formó patrón en el lab (rango={})", hi - lo);
+        // El heatmap se construye a la resolución del lab sin panics.
+        let _img = heatmap_image(&lab);
+    }
+
+    /// Ciclar el catálogo desde la difusión por defecto entrega la reacción‑difusión.
+    #[test]
+    fn preset_cicla_al_siguiente() {
+        let n = next_preset(&LeyKind::ecuacion_default());
+        match &n {
+            LeyKind::Ecuacion { campos, .. } => assert_eq!(campos.len(), 2),
+            _ => panic!("sigue siendo Ecuacion"),
+        }
+    }
+
+    /// La rampa cubre de oscuro a claro en los extremos (heatmap legible).
+    #[test]
+    fn rampa_va_de_oscuro_a_claro() {
+        let bajo = ramp(0.0);
+        let alto = ramp(1.0);
+        assert!(bajo.iter().map(|&c| c as u32).sum::<u32>() < 100, "extremo bajo oscuro");
+        assert!(alto[0] > 200 && alto[1] > 200, "extremo alto claro");
+    }
 }

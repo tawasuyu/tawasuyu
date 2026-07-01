@@ -28,6 +28,8 @@ llimphi-widget-text-input = { workspace = true }
 llimphi-widget-dock-rail = { workspace = true }
 # Íconos vectoriales (coloridos) para los dientes de cada nivel/herramienta.
 llimphi-icons = { path = "../llimphi-icons" }
+# Construcción de peniko::Image desde RGBA8 para el heatmap del laboratorio de leyes.
+llimphi-image = { path = "../llimphi-image" }
 # Config global del SO: decide la orientación de los dientes (dientes_outside).
 wawa-config = { path = "../../../shared/wawa-config" }
 # Asistencia IA "poor": prosa → WorldRecipe (from_env, cae a Mock/heurística).

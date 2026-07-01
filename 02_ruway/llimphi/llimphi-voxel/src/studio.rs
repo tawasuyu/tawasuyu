@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::actor::{Actor, Age, Clip};
 use crate::director::{ActorKey, ActorScript};
 use crate::conducta::Conducta;
+use crate::ecuacion::{Assign, Expr, FieldDef, Program, Symbols};
 use crate::rig::{Andar, Movimiento, Rig};
 use crate::worldgen::{Bioma, BiomaPalette, Forma, Material, ResolvedMaterial};
 use llimphi_3d::glam::{Mat4, Vec3};
@@ -78,19 +79,44 @@ pub fn window_origin_for_cast(scripts: &[ActorScript], t: f32, dim: [u32; 3]) ->
 //  Nivel 1 — Leyes (físicas / comportamientos)
 // =============================================================================
 
-/// **Tipo de ley** (comportamiento matemático). Enum extensible: hoy `Fluir`
-/// (líquidos), `Crecer` (flora) y `Custom` (placeholder, para abrir a hechizos sin
-/// codear su runtime todavía). **No se simula aún** — es un spec declarativo que un
-/// material adopta y parametriza. Cada variante expone sus parámetros editables vía
-/// [`params`](Self::params) para que la UI arme sliders sin conocer cada caso.
+/// Un **parámetro autorado** de una ley [`Ecuacion`](LeyKind::Ecuacion): nombre (que
+/// la fórmula referencia), valor y rango (para el slider). Es el equivalente dinámico
+/// de los `(nombre, valor, min, max)` cableados de `Fluir`/`Crecer`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParamDef {
+    pub name: String,
+    pub value: f32,
+    pub min: f32,
+    pub max: f32,
+}
+
+impl ParamDef {
+    pub fn new(name: impl Into<String>, value: f32, min: f32, max: f32) -> Self {
+        Self { name: name.into(), value, min, max }
+    }
+}
+
+/// **Tipo de ley** (comportamiento matemático). Enum extensible: `Fluir` (líquidos,
+/// autómata nativo que mueve celdas) y `Crecer` (flora) son leyes **nativas** con
+/// runtime cableado; `Ecuacion` es la ley **autorable** — un sistema de ecuaciones de
+/// campo escrito por el usuario y compilado (ver [`crate::ecuacion`]). Cada variante
+/// nativa expone sus parámetros editables vía [`params`](Self::params) para que la UI
+/// arme sliders; la `Ecuacion` declara sus propios campos y parámetros.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LeyKind {
     /// Líquido: se esparce a vecinos en horizontal y cae con gravedad (cascadas).
     Fluir { gravedad: f32, horizontal: f32 },
     /// Crece a una velocidad VARIABLE (flora).
     Crecer { velocidad: f32 },
-    /// Comportamiento a definir (arquitectura abierta; sin parámetros aún).
-    Custom,
+    /// **Ley autorable**: campos de estado + parámetros + una ecuación
+    /// `Δcampoₖ/dt = fuenteₖ` por campo (misma cantidad y orden que `campos`). El
+    /// texto `fuentes[k]` se parsea con los nombres de `campos`/`params`. Generaliza
+    /// difusión, reacción‑difusión, calor, crecimiento… con la misma máquina.
+    Ecuacion {
+        campos: Vec<FieldDef>,
+        params: Vec<ParamDef>,
+        fuentes: Vec<String>,
+    },
 }
 
 impl LeyKind {
@@ -99,8 +125,18 @@ impl LeyKind {
         vec![
             LeyKind::Fluir { gravedad: 1.0, horizontal: 0.6 },
             LeyKind::Crecer { velocidad: 1.0 },
-            LeyKind::Custom,
+            LeyKind::ecuacion_default(),
         ]
+    }
+
+    /// Ley autorable por defecto: **difusión** de un campo `c` (`Δc/dt = k·lap(c)`).
+    /// El punto de partida más simple que ya *hace algo* visible en el laboratorio.
+    pub fn ecuacion_default() -> LeyKind {
+        LeyKind::Ecuacion {
+            campos: vec![FieldDef::new("c", 0.0, 0.0, 1.0)],
+            params: vec![ParamDef::new("k", 0.15, 0.0, 0.25)],
+            fuentes: vec!["k * lap(c)".to_string()],
+        }
     }
 
     /// Nombre legible (español).
@@ -108,7 +144,7 @@ impl LeyKind {
         match self {
             LeyKind::Fluir { .. } => "fluir",
             LeyKind::Crecer { .. } => "crecer",
-            LeyKind::Custom => "custom",
+            LeyKind::Ecuacion { .. } => "ecuación",
         }
     }
 
@@ -127,7 +163,9 @@ impl LeyKind {
                 ("horizontal", *horizontal, 0.0, 1.0),
             ],
             LeyKind::Crecer { velocidad } => vec![("velocidad", *velocidad, 0.0, 5.0)],
-            LeyKind::Custom => vec![],
+            // La `Ecuacion` tiene parámetros dinámicos (nombres `String`): no caben en
+            // esta firma `&'static str`; la UI los edita vía [`ecuacion_params`].
+            LeyKind::Ecuacion { .. } => vec![],
         }
     }
 
@@ -144,8 +182,72 @@ impl LeyKind {
                     *velocidad = v;
                 }
             }
-            LeyKind::Custom => {}
+            // Para `Ecuacion` se usa [`set_ecuacion_param`] (params dinámicos).
+            LeyKind::Ecuacion { .. } => {}
         }
+    }
+
+    // --- Autoría de leyes por ecuación -------------------------------------
+
+    /// Parámetros de una ley `Ecuacion` como `(nombre, valor, min, max)` para armar
+    /// sliders. Vacío si no es una `Ecuacion`.
+    pub fn ecuacion_params(&self) -> Vec<(String, f32, f32, f32)> {
+        match self {
+            LeyKind::Ecuacion { params, .. } => {
+                params.iter().map(|p| (p.name.clone(), p.value, p.min, p.max)).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Valores de los parámetros de la `Ecuacion` en orden (los que consume el motor).
+    pub fn ecuacion_param_values(&self) -> Vec<f32> {
+        match self {
+            LeyKind::Ecuacion { params, .. } => params.iter().map(|p| p.value).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Fija el valor del parámetro `i` de una ley `Ecuacion` (clampeado a su rango).
+    pub fn set_ecuacion_param(&mut self, i: usize, v: f32) {
+        if let LeyKind::Ecuacion { params, .. } = self {
+            if let Some(p) = params.get_mut(i) {
+                p.value = v.clamp(p.min, p.max);
+            }
+        }
+    }
+
+    /// Tabla de símbolos (campos + params por nombre) para parsear/imprimir sus
+    /// fórmulas. `None` si no es una `Ecuacion`.
+    pub fn ecuacion_symbols(&self) -> Option<Symbols> {
+        match self {
+            LeyKind::Ecuacion { campos, params, .. } => Some(Symbols {
+                campos: campos.iter().map(|c| c.name.clone()).collect(),
+                params: params.iter().map(|p| p.name.clone()).collect(),
+            }),
+            _ => None,
+        }
+    }
+
+    /// Compila una ley `Ecuacion` a un [`Program`] ejecutable: parsea cada fuente con
+    /// los símbolos de la ley y arma un `Δcampoₖ/dt` por campo. `None` si no es
+    /// `Ecuacion`; `Err(msg)` con el primer error de parseo (legible, ubicando el campo).
+    pub fn compile_ecuacion(&self) -> Option<Result<Program, String>> {
+        let LeyKind::Ecuacion { campos, fuentes, .. } = self else {
+            return None;
+        };
+        let sym = self.ecuacion_symbols()?;
+        let mut asignaciones = Vec::with_capacity(fuentes.len());
+        for (i, src) in fuentes.iter().enumerate() {
+            match Expr::parse(src, &sym) {
+                Ok(expr) => asignaciones.push(Assign { campo: i as u16, expr }),
+                Err(err) => {
+                    let campo = campos.get(i).map(|c| c.name.as_str()).unwrap_or("?");
+                    return Some(Err(format!("campo «{campo}»: {err}")));
+                }
+            }
+        }
+        Some(Ok(Program::compile(&asignaciones)))
     }
 }
 
@@ -994,6 +1096,62 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ley_ecuacion_compila_y_corre() {
+        use crate::ecuacion::FieldEngine;
+        // Autoría de una ley Gray–Scott con los tipos del studio (como haría la UI).
+        let ley = LeyKind::Ecuacion {
+            campos: vec![
+                FieldDef::new("u", 1.0, 0.0, 1.0),
+                FieldDef::new("v", 0.0, 0.0, 1.0),
+            ],
+            params: vec![
+                ParamDef::new("Du", 0.16, 0.0, 1.0),
+                ParamDef::new("Dv", 0.08, 0.0, 1.0),
+                ParamDef::new("F", 0.06, 0.0, 0.1),
+                ParamDef::new("k", 0.062, 0.0, 0.1),
+            ],
+            fuentes: vec![
+                "Du * lap(u) - u * v * v + F * (1 - u)".into(),
+                "Dv * lap(v) + u * v * v - (F + k) * v".into(),
+            ],
+        };
+        let prog = ley.compile_ecuacion().expect("es Ecuacion").expect("compila");
+        let LeyKind::Ecuacion { campos, .. } = &ley else { unreachable!() };
+        let mut eng = FieldEngine::new([32, 1, 32], campos.clone());
+        for z in 14..18 {
+            for x in 14..18 {
+                eng.set(1, x, 0, z, 0.5);
+                eng.set(0, x, 0, z, 0.25);
+            }
+        }
+        let params = ley.ecuacion_param_values();
+        for _ in 0..300 {
+            eng.step(&prog, &params, 1.0);
+        }
+        let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+        for z in 0..32 {
+            for x in 0..32 {
+                let v = eng.get(1, x, 0, z);
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+        }
+        assert!(hi - lo > 0.05, "la ley autorada formó patrón (rango={})", hi - lo);
+    }
+
+    #[test]
+    fn ley_ecuacion_error_de_parseo_ubicado() {
+        let ley = LeyKind::Ecuacion {
+            campos: vec![FieldDef::new("c", 0.0, 0.0, 1.0)],
+            params: vec![],
+            fuentes: vec!["k * lap(c)".into()], // `k` no declarado
+        };
+        let err = ley.compile_ecuacion().unwrap().unwrap_err();
+        assert!(err.contains("campo «c»"), "ubica el campo: {err}");
+        assert!(err.contains('k'), "menciona el símbolo desconocido: {err}");
+    }
 
     #[test]
     fn proyecto_round_trip_ron() {
