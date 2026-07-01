@@ -278,6 +278,7 @@ pub(crate) fn inicializar() -> Model {
         dureza_pincel: DUREZA_PINCEL,
         shift_held: false,
         alt_held: false,
+        varita_contigua: true,
         clon_ancla: None,
         clon_offset: None,
         ultimo_pincel: None,

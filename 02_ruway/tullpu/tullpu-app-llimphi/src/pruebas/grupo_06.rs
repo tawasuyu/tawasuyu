@@ -726,6 +726,78 @@
     }
 
     #[test]
+    fn feather_cobertura_parcial_mezcla_al_limpiar() {
+        // Máscara con un píxel de cobertura media (128): limpiar debe mezclar
+        // proporcionalmente, no aplicar/omitir por umbral.
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        let hash = model.almacen.insertar(vec![255u8; 4 * 4 * 4]); // blanco opaco
+        model.lienzo.capa_mut(id).unwrap().contenido = hash;
+        let mut mask = vec![0u8; 16];
+        mask[0] = 255; // (0,0) cobertura plena
+        mask[1] = 128; // (1,0) cobertura media
+        let mh = model.almacen.insertar(mask);
+        model.seleccion_mascara = Some(mh);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 1 });
+        assert!(limpiar_seleccion_en_capa(&mut model));
+        let nuevo = model.lienzo.capa(id).unwrap().contenido;
+        let out = model.almacen.obtener(nuevo).unwrap();
+        assert_eq!(out[3], 0, "(0,0) cobertura plena → alfa 0");
+        // (1,0): alfa = 255·(255−128)/255 = 127 (mezcla parcial hacia transparente).
+        assert_eq!(out[7], 127, "(1,0) cobertura media → alfa a mitad");
+        assert_eq!(out[11], 255, "(2,0) fuera de la máscara → intacto");
+    }
+
+    #[test]
+    fn desvanecer_seleccion_crea_rampa_en_el_borde() {
+        let mut model = modelo_minimo(); // 4×4
+        // Selección dura: cols 0,1 marcadas; cols 2,3 no.
+        let mut mask = vec![0u8; 16];
+        for y in 0..4 {
+            mask[y * 4] = 255;
+            mask[y * 4 + 1] = 255;
+        }
+        let mh = model.almacen.insertar(mask);
+        model.seleccion_mascara = Some(mh);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 4 });
+        assert!(desvanecer_seleccion(&mut model, 1));
+        let cov = cobertura_seleccion(&model).unwrap();
+        // El borde 0↔255 se volvió rampa: col 1 y col 2 quedan intermedias.
+        assert_eq!(cov[0], 255, "col 0 (interior) plena");
+        assert!(cov[1] < 255 && cov[1] > 0, "col 1 (borde) es rampa");
+        assert!(cov[2] < 255 && cov[2] > 0, "col 2 (borde) es rampa");
+        assert_eq!(cov[3], 0, "col 3 (exterior) vacía");
+    }
+
+    #[test]
+    fn varita_global_selecciona_color_no_contiguo() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        // 4×1 replicado: [rojo, azul, rojo, azul] en cada fila.
+        let (w, h) = (4u32, 4u32);
+        let mut buf = Vec::new();
+        for _y in 0..h {
+            for x in 0..w {
+                if x % 2 == 0 { buf.extend_from_slice(&[255, 0, 0, 255]); }
+                else { buf.extend_from_slice(&[0, 0, 255, 255]); }
+            }
+        }
+        let hash = model.almacen.insertar(buf);
+        model.lienzo.capa_mut(id).unwrap().contenido = hash;
+        model.shift_held = false;
+        model.alt_held = false;
+        // Modo global: desde un rojo agarra AMBAS columnas rojas.
+        model.varita_contigua = false;
+        assert!(seleccionar_por_color(&mut model, 0, 0));
+        let cov = cobertura_seleccion(&model).unwrap();
+        for y in 0..h as usize {
+            assert_eq!(cov[y * 4], 255, "col 0 roja seleccionada");
+            assert_eq!(cov[y * 4 + 2], 255, "col 2 roja seleccionada (no contigua)");
+            assert_eq!(cov[y * 4 + 1], 0, "col 1 azul fuera");
+        }
+    }
+
+    #[test]
     fn mover_con_mascara_irregular_conserva_la_forma() {
         // Lienzo 4×4. Máscara diagonal: sólo (0,0) y (1,1). Los píxeles NO
         // seleccionados dentro del bbox (1,0)/(0,1) deben quedarse quietos —

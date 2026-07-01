@@ -117,6 +117,10 @@ pub(crate) struct Model {
     /// Estado vivo de la tecla Alt (idéntico patrón que `shift_held`). El
     /// tampón de clonado lo usa: Alt+click fija el origen del clon.
     pub(crate) alt_held: bool,
+    /// Modo de la varita mágica: `true` = contigua (flood 4-conexión desde la
+    /// semilla), `false` = global (todo píxel del color en el lienzo, sin
+    /// exigir conectividad). Se alterna con el botón de la barra de la varita.
+    pub(crate) varita_contigua: bool,
     /// Origen del clon (coords-imagen) fijado con Alt+click. `None` hasta
     /// fijarlo. Persiste entre trazos hasta re-fijarlo o cambiar de herramienta.
     pub(crate) clon_ancla: Option<(i32, i32)>,
@@ -733,6 +737,12 @@ pub(crate) enum Msg {
     MoverSeleccion { dx: i32, dy: i32 },
     /// Invierte la selección vigente (máscara o rect) dentro del lienzo.
     InvertirSeleccion,
+    /// Desvanece (*feather*) la selección vigente con un desenfoque de caja de
+    /// `radio` px: el borde duro pasa a cobertura parcial. No toca el historial.
+    DesvanecerSeleccion(u32),
+    /// Alterna el modo de la varita mágica entre contigua y global (por color
+    /// en todo el lienzo). No toca la selección vigente.
+    ToggleVaritaContigua,
     /// Arma una selección que cubre el lienzo entero (`(0,0)..(w,h)`).
     /// No toca píxeles ni el historial. No-op si el lienzo es degenerado.
     SeleccionarTodo,

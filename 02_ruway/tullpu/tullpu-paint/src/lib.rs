@@ -416,6 +416,41 @@ pub fn combinar_mascaras(base: &[u8], nueva: &[u8], modo: ModoMascara) -> Vec<u8
     out
 }
 
+/// Selección por color **global** (varita no-contigua): marca TODO píxel del
+/// buffer Rgba8 `w × h` cuyo color esté dentro de `tol` (suma de |Δ| sobre RGBA,
+/// métrica `0..=1020`) respecto al píxel semilla `(sx, sy)`, sin exigir
+/// conectividad. Devuelve una máscara de un canal `W·H` (255 = dentro), o `None`
+/// si la semilla cae fuera. Es la contraparte de [`flood_mascara`] (contigua).
+/// Pura.
+pub fn mascara_por_color_global(
+    src: &[u8],
+    w: u32,
+    h: u32,
+    sx: u32,
+    sy: u32,
+    tol: u32,
+) -> Option<Vec<u8>> {
+    let w_us = w as usize;
+    let h_us = h as usize;
+    if sx >= w || sy >= h {
+        return None;
+    }
+    let si = ((sy as usize) * w_us + sx as usize) * 4;
+    let seed = [src[si], src[si + 1], src[si + 2], src[si + 3]];
+    let mut mascara = vec![0u8; w_us * h_us];
+    for i in 0..(w_us * h_us) {
+        let p = i * 4;
+        let d = (src[p] as i32 - seed[0] as i32).unsigned_abs()
+            + (src[p + 1] as i32 - seed[1] as i32).unsigned_abs()
+            + (src[p + 2] as i32 - seed[2] as i32).unsigned_abs()
+            + (src[p + 3] as i32 - seed[3] as i32).unsigned_abs();
+        if d <= tol {
+            mascara[i] = 255;
+        }
+    }
+    Some(mascara)
+}
+
 /// Rasteriza un polígono (lista de vértices en coords-imagen) a una máscara
 /// de un canal `W·H` por relleno scanline con regla **par-impar** (even-odd):
 /// 255 dentro del polígono, 0 fuera. Es la base de la herramienta lazo —
@@ -458,6 +493,47 @@ pub fn poligono_a_mascara(pts: &[(i32, i32)], w: u32, h: u32) -> Vec<u8> {
         }
     }
     m
+}
+
+/// Desenfoque de caja **separable** sobre una máscara de un canal `w × h` con
+/// radio `r` (ventana `2r+1`), con extensión de borde por clamp. Suaviza los
+/// saltos 0↔255 a una rampa → es el núcleo del *feather* de selección: un borde
+/// duro se convierte en cobertura parcial que las ops destructivas respetan.
+/// `r == 0` devuelve una copia idéntica. Pura.
+pub fn desenfocar_mascara(src: &[u8], w: u32, h: u32, r: u32) -> Vec<u8> {
+    if r == 0 || w == 0 || h == 0 {
+        return src.to_vec();
+    }
+    let w = w as usize;
+    let h = h as usize;
+    let ri = r as i32;
+    let ventana = (2 * r + 1) as u32;
+    // Pasada horizontal: promedio de ventana por fila.
+    let mut tmp = vec![0u8; w * h];
+    for y in 0..h {
+        let fila = y * w;
+        for x in 0..w {
+            let mut sum = 0u32;
+            for dx in -ri..=ri {
+                let xx = (x as i32 + dx).clamp(0, w as i32 - 1) as usize;
+                sum += src[fila + xx] as u32;
+            }
+            tmp[fila + x] = (sum / ventana) as u8;
+        }
+    }
+    // Pasada vertical sobre el intermedio.
+    let mut out = vec![0u8; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let mut sum = 0u32;
+            for dy in -ri..=ri {
+                let yy = (y as i32 + dy).clamp(0, h as i32 - 1) as usize;
+                sum += tmp[yy * w + x] as u32;
+            }
+            out[y * w + x] = (sum / ventana) as u8;
+        }
+    }
+    out
 }
 
 /// Traslada una máscara de un canal `w × h` por el offset con signo `(dx, dy)`
@@ -1164,6 +1240,38 @@ mod tests {
         // (1,1) está dentro (x+y < 7); (6,6) fuera.
         assert_eq!(m[1 * 8 + 1], 255, "interior seleccionado");
         assert_eq!(m[6 * 8 + 6], 0, "exterior libre");
+    }
+
+    #[test]
+    fn desenfocar_mascara_suaviza_el_borde() {
+        // 8×1: mitad izquierda 255, derecha 0. Un box blur r=1 crea rampa.
+        let m: Vec<u8> = (0..8).map(|x| if x < 4 { 255 } else { 0 }).collect();
+        let out = desenfocar_mascara(&m, 8, 1, 1);
+        // Interior lejano intacto; borde intermedio.
+        assert_eq!(out[0], 255, "interior pleno");
+        assert_eq!(out[7], 0, "exterior lejano vacío");
+        // El píxel 3 (último 255) promedia con el 4 (0) → baja de 255.
+        assert!(out[3] < 255 && out[3] > 0, "borde interior es rampa");
+        assert!(out[4] < 255 && out[4] > 0, "borde exterior es rampa");
+        // r=0 es identidad.
+        assert_eq!(desenfocar_mascara(&m, 8, 1, 0), m);
+    }
+
+    #[test]
+    fn mascara_global_agarra_pixeles_no_contiguos() {
+        // 4×1: [rojo, azul, rojo, azul]. Global desde un rojo agarra AMBOS
+        // rojos aunque estén separados por azul (a diferencia de flood_mascara).
+        let mut src = Vec::new();
+        for c in [[255, 0, 0, 255], [0, 0, 255, 255], [255, 0, 0, 255], [0, 0, 255, 255]] {
+            src.extend_from_slice(&c);
+        }
+        let global = mascara_por_color_global(&src, 4, 1, 0, 0, 16).unwrap();
+        assert_eq!(global, vec![255, 0, 255, 0], "ambos rojos, saltando el azul");
+        // La contigua sólo agarra el primer rojo.
+        let contigua = flood_mascara(&src, 4, 1, 0, 0, 16).unwrap();
+        assert_eq!(contigua, vec![255, 0, 0, 0], "flood corta en el azul");
+        // Semilla fuera → None.
+        assert!(mascara_por_color_global(&src, 4, 1, 9, 0, 0).is_none());
     }
 
     #[test]

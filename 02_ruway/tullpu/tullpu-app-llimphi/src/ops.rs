@@ -92,6 +92,7 @@ pub(crate) use tullpu_paint::{
     combinar_mascaras,
     componer_clip_en_canvas,
     cobertura_pincel,
+    desenfocar_mascara,
     estampar_disco,
     estampar_disco_mascara,
     extraer_rect_a_buffer,
@@ -99,6 +100,7 @@ pub(crate) use tullpu_paint::{
     flood_fill_mascara,
     flood_mascara,
     limpiar_rect_en_buffer,
+    mascara_por_color_global,
     poligono_a_mascara,
     recortar_buffer,
     recortar_buffer_bpp,
@@ -2292,13 +2294,21 @@ pub(crate) fn seleccionar_por_color(model: &mut Model, sx: u32, sy: u32) -> bool
             return false;
         }
     };
-    let Some(mascara) = flood_mascara(img.as_raw(), w, h, sx, sy, TOL_BALDE) else {
+    // Contigua (flood 4-conexión) o global (todo píxel del color, sin importar
+    // conectividad), según el modo de la varita.
+    let mascara = if model.varita_contigua {
+        flood_mascara(img.as_raw(), w, h, sx, sy, TOL_BALDE)
+    } else {
+        mascara_por_color_global(img.as_raw(), w, h, sx, sy, TOL_BALDE)
+    };
+    let Some(mascara) = mascara else {
         model.estado = "varita · semilla inválida".into();
         return false;
     };
     // Los modificadores deciden reemplazar / sumar / restar / intersecar.
     let modo = modo_seleccion(model);
-    fijar_con_modo(model, mascara, modo, "varita")
+    let verbo = if model.varita_contigua { "varita" } else { "varita global" };
+    fijar_con_modo(model, mascara, modo, verbo)
 }
 
 /// Reconstruye el overlay cacheado de la selección desde `seleccion_mascara`:
@@ -2427,6 +2437,36 @@ pub(crate) fn invertir_seleccion(model: &mut Model) -> bool {
     true
 }
 
+/// Desvanece (*feather*) la selección vigente: materializa su cobertura, la
+/// pasa por un desenfoque de caja de radio `radio` ([`desenfocar_mascara`]) y la
+/// guarda como máscara — el borde duro pasa a cobertura parcial, que las ops
+/// destructivas respetan proporcionalmente. No-op si no hay selección o si el
+/// resultado queda vacío.
+pub(crate) fn desvanecer_seleccion(model: &mut Model, radio: u32) -> bool {
+    let Some(cov) = cobertura_seleccion(model) else {
+        model.estado = "no hay selección que desvanecer".into();
+        return false;
+    };
+    if radio == 0 {
+        model.estado = "radio de feather 0 — sin efecto".into();
+        return false;
+    }
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let suave = desenfocar_mascara(&cov, w, h, radio);
+    let Some(bbox) = bbox_de_mascara(&suave, w, h) else {
+        model.estado = "desvanecer · quedó vacío".into();
+        return false;
+    };
+    let count = suave.iter().filter(|&&v| v > 0).count();
+    let hash = model.almacen.insertar(suave);
+    model.seleccion_mascara = Some(hash);
+    model.seleccion = Some(bbox);
+    sincronizar_overlay_seleccion(model);
+    model.estado = format!("selección desvanecida {radio}px · {count} px con cobertura");
+    true
+}
+
 /// Lazo: rasteriza el polígono `puntos` (coords-imagen) a una máscara de
 /// selección por relleno par-impar y la guarda en `model.seleccion_mascara`
 /// con su bounding box. No toca píxeles ni el historial. No-op (con estado)
@@ -2502,8 +2542,26 @@ fn aplicar_px_en_seleccion(
     let n = cobertura.len().min(buf.len() / 4);
     let mut tocados = 0usize;
     for i in 0..n {
-        if cobertura[i] > 127 {
-            f(&mut buf[i * 4..i * 4 + 4]);
+        let c = cobertura[i] as u32;
+        if c == 0 {
+            continue;
+        }
+        let p = i * 4;
+        let orig = [buf[p], buf[p + 1], buf[p + 2], buf[p + 3]];
+        let mut px = orig;
+        f(&mut px);
+        if c >= 255 {
+            // Cobertura plena: aplica tal cual (path binario histórico, idéntico).
+            buf[p..p + 4].copy_from_slice(&px);
+        } else {
+            // Cobertura parcial (feather): mezcla el resultado hacia el original
+            // por `c/255` → borde gradual en vez de umbral duro.
+            for k in 0..4 {
+                buf[p + k] =
+                    ((px[k] as u32 * c + orig[k] as u32 * (255 - c)) / 255) as u8;
+            }
+        }
+        if buf[p..p + 4] != orig {
             tocados += 1;
         }
     }

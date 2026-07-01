@@ -643,6 +643,18 @@ impl App for Tullpu {
             Msg::InvertirSeleccion => {
                 invertir_seleccion(&mut model);
             }
+            Msg::DesvanecerSeleccion(radio) => {
+                // No destructivo sobre píxeles: sólo cambia la máscara.
+                desvanecer_seleccion(&mut model, radio);
+            }
+            Msg::ToggleVaritaContigua => {
+                model.varita_contigua = !model.varita_contigua;
+                model.estado = if model.varita_contigua {
+                    "varita: contigua".into()
+                } else {
+                    "varita: global (por color)".into()
+                };
+            }
             Msg::SeleccionarTodo => {
                 let w = model.lienzo.width;
                 let h = model.lienzo.height;
@@ -1952,6 +1964,8 @@ fn app_menu(model: &Model) -> AppMenu {
                 .item(dup_sel)
                 .item(sel_todo)
                 .item(MenuItem::new("Invertir selección", "sel.invertir"))
+                .item(MenuItem::new("Desvanecer selección", "sel.desvanecer"))
+                .item(MenuItem::new("Varita: contigua/global", "sel.varita_modo"))
                 .item(limpiar_sel)
                 .item(recortar),
         )
@@ -2032,6 +2046,8 @@ fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
         "edit.recortar_sel" => Some(Msg::RecortarASeleccion),
         "sel.todo" => Some(Msg::SeleccionarTodo),
         "sel.invertir" => Some(Msg::InvertirSeleccion),
+        "sel.desvanecer" => Some(Msg::DesvanecerSeleccion(3)),
+        "sel.varita_modo" => Some(Msg::ToggleVaritaContigua),
         "sel.limpiar" => Some(Msg::LimpiarSeleccion),
         "view.zoom_in" => Some(Msg::Zoom { mult: ZOOM_BASE, ancla: None }),
         "view.zoom_out" => Some(Msg::Zoom { mult: 1.0 / ZOOM_BASE, ancla: None }),
