@@ -169,8 +169,11 @@ done
 
 # ── Sembrar el ecosistema en el autostart de la sesión (tu usuario) ──────────
 # La sesión "mirada" (exec vacío) corre ~/.config/mirada/autostart como tu
-# usuario tras el login del greeter. Sembramos pata + shuma + notificaciones
-# (idempotente, sin pisar lo que ya tengas) para que el escritorio venga entero.
+# usuario tras el login del greeter. Sembramos pata + notificaciones (idempotente,
+# sin pisar lo que ya tengas) para que el escritorio venga entero. NO sembramos
+# shuma: pata ya abre el shell embebido; una instancia standalone de
+# shuma-shell-llimphi al arranque es una ventana suelta redundante (lección metal
+# 2026-06-30). Quien lo quiera, lo agrega a mano.
 AUTO="${HOME}/.config/mirada/autostart"
 mkdir -p "$(dirname "$AUTO")"
 # Audio: pipewire es un daemon de USUARIO (el init no lo arranca). Lo sembramos
@@ -179,10 +182,10 @@ mkdir -p "$(dirname "$AUTO")"
 for a in pipewire wireplumber pipewire-pulse; do
     have "$a" && { grep -qxF "$a" "$AUTO" 2>/dev/null || echo "$a" >> "$AUTO"; }
 done
-for line in pata-llimphi shuma-shell-llimphi pata-notify; do
+for line in pata-llimphi pata-notify; do
     grep -qxF "$line" "$AUTO" 2>/dev/null || echo "$line" >> "$AUTO"
 done
-info "ecosistema sembrado en $AUTO (pata-llimphi · shuma-shell-llimphi · pata-notify)"
+info "ecosistema sembrado en $AUTO (pata-llimphi · pata-notify)"
 
 # ── Entrada de GRUB: clona tu menuentry default y le cambia el init ──────────
 # Tomamos el cuerpo del PRIMER menuentry de nivel superior de tu grub.cfg (tu
