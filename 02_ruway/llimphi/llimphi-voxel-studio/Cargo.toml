@@ -26,6 +26,8 @@ llimphi-widget-button = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 # Dientes (pestañas que sobresalen) para fraccionar los sets de herramientas del sidebar.
 llimphi-widget-dock-rail = { workspace = true }
+# Grafo de nodos: la segunda superficie de autoría de las Leyes por ecuación.
+llimphi-widget-nodegraph = { workspace = true }
 # Íconos vectoriales (coloridos) para los dientes de cada nivel/herramienta.
 llimphi-icons = { path = "../llimphi-icons" }
 # Construcción de peniko::Image desde RGBA8 para el heatmap del laboratorio de leyes.

@@ -26,18 +26,21 @@ use llimphi_ui::{
     App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta,
 };
 use llimphi_voxel::{
-    window_origin_for_cast, world_dim, ActorKeySpec, ActorScript, ActorSpec, Age, Bioma,
+    window_origin_for_cast, world_dim, ActorKeySpec, ActorScript, ActorSpec, Age, BinOp, Bioma,
     BiomaPalette, CharSpec, Clip, FieldDef, FieldEngine, Forma, LeyKind, LeyUso, MatRole, Material,
-    MaterialDef, Mundo, MundoRender, ParamDef, Program, Project, SceneSpec, ShotKind, ShotSpec,
-    PREVIEW_DIM_XZ,
+    MaterialDef, Mundo, MundoRender, ParamDef, Program, Project, Reduce, SceneSpec, ShotKind,
+    ShotSpec, UnOp, PREVIEW_DIM_XZ,
 };
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_dock_rail::{dock_rail_view_side, DockRailItem, DockRailPalette, DockRailSide};
 use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
+use llimphi_widget_nodegraph::{nodegraph_view_ex, NodeId, NodegraphMetrics, NodegraphPalette, PinIdx};
 use llimphi_image::{from_rgba8, Image};
+use graph::{EqGraph, NodeOp};
 
 mod ai;
+mod graph;
 mod preview;
 mod render;
 mod shot;
@@ -122,6 +125,38 @@ fn ensure_lab(model: &mut Model) {
     };
     let vis = model.lab.as_ref().map(|x| x.vis).unwrap_or(0);
     model.lab = Some(LawLab::build(id, model.lab_gen, &campos, program, vis));
+}
+
+/// (Re)construye el grafo de nodos a partir de las fórmulas de la ley seleccionada.
+fn rebuild_eq_graph(model: &mut Model) {
+    let built = sel_ley(model).and_then(|l| match &l.kind {
+        LeyKind::Ecuacion { fuentes, .. } => {
+            l.kind.ecuacion_symbols().map(|sym| EqGraph::from_fuentes(fuentes, &sym))
+        }
+        _ => None,
+    });
+    model.eq_graph = built;
+    model.eq_graph_gen = model.lab_gen;
+}
+
+/// Recompila el grafo a fórmulas y las escribe en la ley. Bump de `lab_gen` (para que
+/// el laboratorio recompile) marcando el grafo como en‑sync (no se reconstruye solo).
+fn sync_graph_to_fuentes(model: &mut Model) {
+    let Some(sym) = sel_ley(model).and_then(|l| l.kind.ecuacion_symbols()) else {
+        return;
+    };
+    let n = sym.campos.len();
+    let fuentes = match &model.eq_graph {
+        Some(g) => g.to_fuentes(n, &sym),
+        None => return,
+    };
+    if let Some(l) = sel_ley_mut(model) {
+        if let LeyKind::Ecuacion { fuentes: f, .. } = &mut l.kind {
+            *f = fuentes;
+        }
+    }
+    model.lab_gen += 1;
+    model.eq_graph_gen = model.lab_gen;
 }
 
 /// Siembra un motor de campo: cada campo a su `init` + una mancha central (para
@@ -279,6 +314,12 @@ enum Msg {
     RemoveEcuParam,
     CycleLabField,
     ReseedLab,
+    // Vista de grafo de nodos de la ley.
+    ToggleLeyesView,
+    GraphDrag(NodeId, f32, f32),
+    GraphConnect(NodeId, PinIdx, NodeId, PinIdx),
+    GraphAddNode(NodeOp),
+    GraphDeleteNode(NodeId),
     // Materiales.
     CycleMatRole,
     SetMatColor(usize, f32),
@@ -411,6 +452,13 @@ struct Model {
     formula_input: TextInputState,
     formula_focused: bool,
     formula_target: usize,
+    /// Nivel Leyes: modo de la vista central — `false` laboratorio (heatmap),
+    /// `true` grafo de nodos (la segunda superficie de autoría).
+    leyes_node_mode: bool,
+    /// Grafo de nodos de la ley (derivado de las fórmulas; estado de UI).
+    eq_graph: Option<EqGraph>,
+    /// `lab_gen` con el que se armó el grafo (para saber si el texto cambió afuera).
+    eq_graph_gen: u64,
 }
 
 impl Model {
@@ -692,6 +740,40 @@ impl App for Studio {
             Msg::ReseedLab => {
                 if let Some(lab) = &mut model.lab {
                     lab.reseed();
+                }
+            }
+            Msg::ToggleLeyesView => {
+                model.leyes_node_mode = !model.leyes_node_mode;
+                model.formula_focused = false;
+                if model.leyes_node_mode {
+                    rebuild_eq_graph(&mut model);
+                } else {
+                    model.eq_graph = None;
+                }
+            }
+            Msg::GraphDrag(id, dx, dy) => {
+                if let Some(g) = &mut model.eq_graph {
+                    g.drag(id, dx, dy); // layout puro: no recompila
+                }
+            }
+            Msg::GraphConnect(from, _fp, to, tp) => {
+                let ok = model.eq_graph.as_mut().map(|g| g.connect(from, to, tp)).unwrap_or(false);
+                if ok {
+                    sync_graph_to_fuentes(&mut model);
+                }
+            }
+            Msg::GraphAddNode(op) => {
+                if let Some(g) = &mut model.eq_graph {
+                    g.add(op, 40.0, 40.0); // suelto; entra en la fórmula al conectarlo
+                }
+            }
+            Msg::GraphDeleteNode(id) => {
+                let had = model.eq_graph.is_some();
+                if let Some(g) = &mut model.eq_graph {
+                    g.delete(id);
+                }
+                if had {
+                    sync_graph_to_fuentes(&mut model);
                 }
             }
             Msg::CycleMatRole => {
@@ -1208,6 +1290,12 @@ impl App for Studio {
                     model.time += DT; // turntable + respiración
                 } else if model.level == Level::Leyes {
                     ensure_lab(&mut model);
+                    // En modo grafo, reconstruir si el texto cambió afuera (no por edición del grafo).
+                    if model.leyes_node_mode
+                        && (model.eq_graph.is_none() || model.eq_graph_gen != model.lab_gen)
+                    {
+                        rebuild_eq_graph(&mut model);
+                    }
                     if model.simulating {
                         let params = sel_ley(&model)
                             .map(|l| l.kind.ecuacion_param_values())
@@ -1427,6 +1515,7 @@ fn cell(child: View<Msg>) -> View<Msg> {
 
 fn center(model: &Model) -> View<Msg> {
     let inner = match model.level {
+        Level::Leyes if model.leyes_node_mode => eq_graph_view(model),
         Level::Leyes => law_lab_view(model),
         Level::Materiales => material_swatch(model),
         _ => canvas_3d(model),
@@ -1496,6 +1585,38 @@ fn law_lab_view(model: &Model) -> View<Msg> {
         .image(heatmap_image(lab)),
         overlay,
     ])
+}
+
+/// Centro del nivel Leyes en **modo grafo**: la ecuación como nodos (misma AST que la
+/// fórmula). Arrastrar la barra de título reubica; arrastrar de un pin de salida a uno
+/// de entrada reconecta (y reescribe la fórmula); right‑click borra el nodo.
+fn eq_graph_view(model: &Model) -> View<Msg> {
+    let theme = &model.theme;
+    let (Some(g), Some(sym)) = (&model.eq_graph, sel_ley(model).and_then(|l| l.kind.ecuacion_symbols()))
+    else {
+        return placeholder_2d("Grafo no disponible (la ley no es por ecuación).", theme);
+    };
+    let specs = g.node_specs(&sym);
+    let palette = NodegraphPalette::from_theme(theme);
+    let metrics = NodegraphMetrics::default();
+    let inner = nodegraph_view_ex(
+        &specs,
+        &g.wires,
+        &palette,
+        &metrics,
+        |id, phase, dx, dy| match phase {
+            DragPhase::Move => Some(Msg::GraphDrag(id, dx, dy)),
+            _ => None,
+        },
+        |from, fp, to, tp| Some(Msg::GraphConnect(from, fp, to, tp)),
+        Some(|id| Some(Msg::GraphDeleteNode(id))),
+    );
+    View::new(Style {
+        position: Position::Absolute,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![inner])
 }
 
 /// Heatmap RGBA del campo visible del laboratorio (rango del campo → rampa magma).
@@ -1803,9 +1924,15 @@ fn ley_editor(model: &Model) -> Vec<View<Msg>> {
     ];
     match &l.kind {
         // --- Ley autorable: editor de ecuaciones + laboratorio -----------------
-        LeyKind::Ecuacion { campos, fuentes, .. } => {
+        LeyKind::Ecuacion { campos, fuentes, params } => {
             v.push(spacer(4.0));
             v.push(button_view("↻ preset (catálogo)", &btn, Msg::LeyPreset));
+            v.push(spacer(4.0));
+            v.push(button_view(
+                if model.leyes_node_mode { "▦ vista: grafo → laboratorio" } else { "▦ vista: laboratorio → grafo" },
+                &btn,
+                Msg::ToggleLeyesView,
+            ));
             v.push(spacer(6.0));
             v.push(button_view(
                 if model.simulating { "⏸ pausar" } else { "▶ simular" },
@@ -1867,6 +1994,43 @@ fn ley_editor(model: &Model) -> Vec<View<Msg>> {
                 theme.fg_placeholder,
                 theme,
             ));
+            // Paleta de nodos (sólo en modo grafo): tocar = agregar un nodo suelto.
+            if model.leyes_node_mode {
+                v.push(spacer(8.0));
+                v.push(section_title("NODOS  (tocar = agregar)", theme));
+                v.push(button_view("const 1", &btn, Msg::GraphAddNode(NodeOp::Const(1.0))));
+                v.push(button_view("dt", &btn, Msg::GraphAddNode(NodeOp::Dt)));
+                for (f, c) in campos.iter().enumerate() {
+                    let f = f as u16;
+                    v.push(button_view(format!("campo {}", c.name), &btn, Msg::GraphAddNode(NodeOp::Field(f))));
+                    v.push(button_view(format!("lap {}", c.name), &btn, Msg::GraphAddNode(NodeOp::Lap(f))));
+                    v.push(button_view(format!("avg {}", c.name), &btn, Msg::GraphAddNode(NodeOp::Vecinos(Reduce::Promedio, f))));
+                }
+                for (p, pd) in params.iter().enumerate() {
+                    v.push(button_view(format!("param {}", pd.name), &btn, Msg::GraphAddNode(NodeOp::Param(p as u16))));
+                }
+                for (lbl, op) in [
+                    ("+", NodeOp::Bin(BinOp::Add)),
+                    ("−", NodeOp::Bin(BinOp::Sub)),
+                    ("×", NodeOp::Bin(BinOp::Mul)),
+                    ("÷", NodeOp::Bin(BinOp::Div)),
+                    ("min", NodeOp::Bin(BinOp::Min)),
+                    ("max", NodeOp::Bin(BinOp::Max)),
+                    ("<", NodeOp::Bin(BinOp::Lt)),
+                    (">", NodeOp::Bin(BinOp::Gt)),
+                    ("abs", NodeOp::Un(UnOp::Abs)),
+                    ("−x", NodeOp::Un(UnOp::Neg)),
+                    ("clamp", NodeOp::Clamp),
+                ] {
+                    v.push(button_view(lbl, &btn, Msg::GraphAddNode(op)));
+                }
+                v.push(spacer(4.0));
+                v.push(body_text(
+                    "arrastrá salida→entrada para conectar · right‑click borra un nodo".into(),
+                    theme.fg_placeholder,
+                    theme,
+                ));
+            }
         }
         // --- Leyes nativas (Fluir/Crecer): sliders cableados -------------------
         _ => {
@@ -2711,6 +2875,9 @@ pub(crate) fn demo_model() -> Model {
         formula_input: TextInputState::new(),
         formula_focused: false,
         formula_target: 0,
+        leyes_node_mode: false,
+        eq_graph: None,
+        eq_graph_gen: 0,
         project,
     };
     reselect_all(&mut model);
