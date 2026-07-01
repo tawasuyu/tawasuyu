@@ -146,14 +146,26 @@ impl WorldPreview {
                     let oz = (k.wrapping_mul(13) % 37) as i32 - 18;
                     let x = (cx + ox).clamp(1, dx as i32 - 2) as u32;
                     let z = (cz + oz).clamp(1, dz as i32 - 2) as u32;
-                    let h = Habitante::spawn(&self.grid, x, z, spec.conducta, 1 + k);
+                    let h = Habitante::spawn(&self.grid, x, z, spec.conducta.clone(), 1 + k);
                     self.manada.push((h, spec.clone()));
                     k += 1;
                 }
             }
         } else {
-            for (h, spec) in &mut self.manada {
-                h.set_conducta(spec.conducta);
+            // Misma cantidad: refrescar el spec (conducta/cuerpo/colores) de cada uno
+            // desde los pobladores, en el mismo orden de llenado, para que las ediciones
+            // en vivo (parámetros e impulsos autorados) se noten sin re-spawnear.
+            let mut idx = 0usize;
+            'refresh: for (spec, n) in pobladores {
+                for _ in 0..*n {
+                    if idx >= self.manada.len() {
+                        break 'refresh;
+                    }
+                    let (h, stored) = &mut self.manada[idx];
+                    *stored = spec.clone();
+                    h.set_conducta(spec.conducta.clone());
+                    idx += 1;
+                }
             }
         }
     }

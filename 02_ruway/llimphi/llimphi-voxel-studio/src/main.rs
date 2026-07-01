@@ -27,9 +27,9 @@ use llimphi_ui::{
 };
 use llimphi_voxel::{
     window_origin_for_cast, world_dim, ActorKeySpec, ActorScript, ActorSpec, Age, BinOp, Bioma,
-    BiomaPalette, CharSpec, Clip, FieldDef, FieldEngine, Forma, LeyKind, LeyUso, MatRole, Material,
-    MaterialDef, Mundo, MundoRender, ParamDef, Program, Project, Reduce, SceneSpec, ShotKind,
-    ShotSpec, UnOp, PREVIEW_DIM_XZ,
+    BiomaPalette, CharSpec, Clip, FieldDef, FieldEngine, Forma, Impulso, LeyKind, LeyUso, MatRole,
+    Material, MaterialDef, Mundo, MundoRender, ParamDef, Primitiva, Program, Project, Reduce,
+    SceneSpec, ShotKind, ShotSpec, UnOp, PREVIEW_DIM_XZ,
 };
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_dock_rail::{dock_rail_view_side, DockRailItem, DockRailPalette, DockRailSide};
@@ -339,8 +339,13 @@ enum Msg {
     CycleAndarEstado,
     SetAndarCadencia(f32),
     SetAndarAmplitud(usize, f32),
-    // Conducta (capa 3).
+    // Conducta (capa 3) — parámetros + impulsos de steering autorables.
     SetConducta(usize, f32),
+    CondAddImpulso,
+    CondRemoveImpulso,
+    CondCycleImpulso(usize),
+    CondFormulaFocus(usize),
+    CondFormulaKey(KeyEvent),
     ToggleManada,
     // Biomas.
     SetBiomaField(BiomaField, f32),
@@ -456,6 +461,11 @@ struct Model {
     formula_input: TextInputState,
     formula_focused: bool,
     formula_target: usize,
+    /// Edición de la fórmula de **peso de un impulso** (nivel Seres › Conducta): buffer
+    /// propio + foco + índice del impulso objetivo (separado del de Leyes).
+    cond_formula_input: TextInputState,
+    cond_formula_focused: bool,
+    cond_formula_target: usize,
     /// Nivel Leyes: modo de la vista central — `false` laboratorio (heatmap),
     /// `true` grafo de nodos (la segunda superficie de autoría).
     leyes_node_mode: bool,
@@ -575,6 +585,9 @@ impl App for Studio {
         if model.formula_focused {
             return Some(Msg::FormulaKey(ev.clone()));
         }
+        if model.cond_formula_focused {
+            return Some(Msg::CondFormulaKey(ev.clone()));
+        }
         if model.seed_focused {
             return Some(Msg::SeedKey(ev.clone()));
         }
@@ -594,16 +607,22 @@ impl App for Studio {
                 model.tool_tab = 0;
                 model.name_focused = false;
                 model.seed_focused = false;
+                model.formula_focused = false;
+                model.cond_formula_focused = false;
                 model.gen += 1;
                 sync_inputs(&mut model);
             }
             Msg::SelectItem(id) => {
                 model.set_selected(id);
                 model.time = 0.0;
+                model.cond_formula_focused = false;
                 model.gen += 1;
                 sync_inputs(&mut model);
             }
-            Msg::SelectTool(i) => model.tool_tab = i,
+            Msg::SelectTool(i) => {
+                model.tool_tab = i;
+                model.cond_formula_focused = false;
+            }
             Msg::NewItem => {
                 let id = new_item(&mut model);
                 model.set_selected(id);
@@ -887,6 +906,57 @@ impl App for Studio {
             Msg::SetConducta(i, v) => {
                 if let Some(c) = sel_sere_mut(&mut model) {
                     c.conducta.set(i, v);
+                }
+            }
+            Msg::CondAddImpulso => {
+                if let Some(c) = sel_sere_mut(&mut model) {
+                    materializar_impulsos(c);
+                    c.conducta.impulsos.push(Impulso::new(Primitiva::Deambular, "1"));
+                }
+            }
+            Msg::CondRemoveImpulso => {
+                if let Some(c) = sel_sere_mut(&mut model) {
+                    materializar_impulsos(c);
+                    if c.conducta.impulsos.len() > 1 {
+                        c.conducta.impulsos.pop();
+                    }
+                    model.cond_formula_focused = false;
+                }
+            }
+            Msg::CondCycleImpulso(i) => {
+                if let Some(c) = sel_sere_mut(&mut model) {
+                    materializar_impulsos(c);
+                    if let Some(imp) = c.conducta.impulsos.get_mut(i) {
+                        imp.primitiva = imp.primitiva.next();
+                    }
+                }
+            }
+            Msg::CondFormulaFocus(i) => {
+                let src = sel_sere(&model)
+                    .map(|c| c.conducta.impulsos_efectivos())
+                    .and_then(|imps| imps.get(i).map(|imp| imp.peso.clone()))
+                    .unwrap_or_default();
+                model.cond_formula_input.set_text(src);
+                model.cond_formula_focused = true;
+                model.cond_formula_target = i;
+                model.formula_focused = false;
+                model.name_focused = false;
+                model.seed_focused = false;
+                model.ai_focused = false;
+            }
+            Msg::CondFormulaKey(ev) => {
+                if ev.state == KeyState::Pressed && matches!(&ev.key, Key::Named(NamedKey::Enter)) {
+                    model.cond_formula_focused = false;
+                } else {
+                    model.cond_formula_input.apply_key(&ev);
+                    let txt = model.cond_formula_input.text();
+                    let target = model.cond_formula_target;
+                    if let Some(c) = sel_sere_mut(&mut model) {
+                        materializar_impulsos(c);
+                        if let Some(imp) = c.conducta.impulsos.get_mut(target) {
+                            imp.peso = txt;
+                        }
+                    }
                 }
             }
             Msg::ToggleManada => {
@@ -2163,16 +2233,64 @@ fn sere_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
     }
 }
 
-/// Editor de la **conducta** (capa 3) de un ser: sliders de locomoción + toggle para
-/// soltar una manada viva en el preview.
+/// Si el ser todavía no tiene impulsos propios (datos viejos), los siembra con los de
+/// fábrica para que el editor tenga qué mostrar/editar (mismo comportamiento en vivo).
+fn materializar_impulsos(c: &mut llimphi_voxel::CharSpec) {
+    if c.conducta.impulsos.is_empty() {
+        c.conducta.impulsos = llimphi_voxel::default_impulsos();
+    }
+}
+
+/// Editor de la **conducta** (capa 3) de un ser: sliders de locomoción (params) +
+/// **impulsos de steering autorables** (primitiva ciclable + fórmula de peso, la misma
+/// máquina de ecuaciones que las Leyes) + toggle para soltar una manada viva.
 fn conducta_tools(model: &Model, c: &llimphi_voxel::CharSpec) -> Vec<View<Msg>> {
     let theme = &model.theme;
     let sp = SliderPalette::from_theme(theme);
     let btn = ButtonPalette::from_theme(theme);
-    let mut v = vec![section_title("CONDUCTA", theme)];
+    let mut v = vec![section_title("PARÁMETROS", theme)];
     for (i, (name, value, min, max)) in c.conducta.params().into_iter().enumerate() {
         v.push(slider_view(name, value, min, max, &sp, move |_p, dv| Some(Msg::SetConducta(i, value + dv))));
     }
+
+    // --- Impulsos de steering (dirección base × fórmula de peso) -----------------
+    v.push(spacer(8.0));
+    v.push(section_title("IMPULSOS  (dirección × peso)", theme));
+    let impulsos = c.conducta.impulsos_efectivos();
+    let sym = llimphi_voxel::Conducta::symbols();
+    for (i, imp) in impulsos.iter().enumerate() {
+        v.push(button_view(format!("{} · {}", i + 1, imp.primitiva.label()), &btn, Msg::CondCycleImpulso(i)));
+        let editing = model.cond_formula_focused && model.cond_formula_target == i;
+        if editing {
+            v.push(text_input_view(
+                &model.cond_formula_input,
+                "peso…",
+                true,
+                &TextInputPalette::from_theme(theme),
+                Msg::CondFormulaFocus(i),
+            ));
+        } else {
+            let src = if imp.peso.is_empty() { "(tocar para editar)".to_string() } else { imp.peso.clone() };
+            v.push(button_view(format!("peso = {src}"), &btn, Msg::CondFormulaFocus(i)));
+        }
+        // Error de parseo de esta fórmula, si lo hay.
+        if let Err(err) = llimphi_voxel::Expr::parse(&imp.peso, &sym) {
+            v.push(body_text(format!("⚠ {err}"), Color::from_rgba8(232, 128, 96, 255), theme));
+        }
+        v.push(spacer(4.0));
+    }
+    v.push(button_view("+ impulso", &btn, Msg::CondAddImpulso));
+    if impulsos.len() > 1 {
+        v.push(spacer(4.0));
+        v.push(button_view("− impulso", &btn, Msg::CondRemoveImpulso));
+    }
+    v.push(spacer(6.0));
+    v.push(body_text(
+        "percepts: cercania_manada · cercania_amenaza · apinamiento · azar · en_suelo · dt".into(),
+        theme.fg_placeholder,
+        theme,
+    ));
+
     v.push(spacer(8.0));
     v.push(section_title("PREVIEW", theme));
     v.push(button_view(
@@ -2181,7 +2299,7 @@ fn conducta_tools(model: &Model, c: &llimphi_voxel::CharSpec) -> Vec<View<Msg>> 
         Msg::ToggleManada,
     ));
     v.push(spacer(4.0));
-    v.push(body_text("una manada del ser deambula y se junta según su conducta".into(), theme.fg_placeholder, theme));
+    v.push(body_text("una manada del ser deambula/se junta/huye según sus impulsos".into(), theme.fg_placeholder, theme));
     v
 }
 
@@ -2916,6 +3034,9 @@ pub(crate) fn demo_model() -> Model {
         formula_input: TextInputState::new(),
         formula_focused: false,
         formula_target: 0,
+        cond_formula_input: TextInputState::new(),
+        cond_formula_focused: false,
+        cond_formula_target: 0,
         leyes_node_mode: false,
         eq_graph: None,
         eq_graph_gen: 0,
@@ -3009,6 +3130,30 @@ mod tests {
             LeyKind::Ecuacion { campos, .. } => assert_eq!(campos.len(), 2),
             _ => panic!("sigue siendo Ecuacion"),
         }
+    }
+
+    /// Las fórmulas de peso de los impulsos de fábrica parsean con la MISMA tabla de
+    /// símbolos que expone el editor de conducta — guarda contra que se desincronicen los
+    /// nombres de percepts/params entre el pie de ayuda y el parser. Y `materializar`
+    /// siembra los impulsos de fábrica en un ser que no tenía.
+    #[test]
+    fn conducta_impulsos_de_fabrica_coherentes_con_el_editor() {
+        let sym = llimphi_voxel::Conducta::symbols();
+        for imp in llimphi_voxel::default_impulsos() {
+            assert!(
+                llimphi_voxel::Expr::parse(&imp.peso, &sym).is_ok(),
+                "la fórmula de fábrica «{}» parsea con los símbolos del editor",
+                imp.peso
+            );
+        }
+        let mut c = CharSpec::new("x", Age::Adult);
+        c.conducta.impulsos.clear();
+        materializar_impulsos(&mut c);
+        assert_eq!(c.conducta.impulsos.len(), llimphi_voxel::default_impulsos().len());
+        // Ciclar la primitiva del primer impulso lo mueve a la siguiente.
+        let antes = c.conducta.impulsos[0].primitiva;
+        c.conducta.impulsos[0].primitiva = antes.next();
+        assert_ne!(antes, c.conducta.impulsos[0].primitiva);
     }
 
     /// La rampa cubre de oscuro a claro en los extremos (heatmap legible).

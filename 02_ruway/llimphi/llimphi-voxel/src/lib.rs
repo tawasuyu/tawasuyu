@@ -31,7 +31,7 @@ mod worldgen;
 
 pub use actor::{Actor, Age, Build, Clip, Pose};
 pub use camera_rig::{cam_lerp, BirthSequence, CamMode};
-pub use conducta::{Conducta, Habitante};
+pub use conducta::{default_impulsos, Conducta, Habitante, Impulso, Primitiva, PARAMS, PERCEPTS};
 pub use director::{ActorKey, ActorSample, ActorScript, Sequence, Shot};
 pub use ecuacion::{
     Assign, BinOp, Dir, Expr, FieldDef, FieldEngine, FieldId, ParamId, Program, Reduce, Symbols,

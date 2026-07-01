@@ -725,6 +725,60 @@ impl Expr {
         self.print(sym, 0)
     }
 
+    /// Evalúa la expresión como **escalar sobre un entorno plano** (sin rejilla): un
+    /// vector de variables (`Field(id) → vars[id]`) y otro de parámetros
+    /// (`Param(id) → params[id]`), más `dt`. Es la evaluación que usan los **agentes**
+    /// (conducta autorable): reusa el mismo AST/parser/printer que las Leyes de rejilla,
+    /// pero las variables son *percepts* del agente, no campos espaciales. Los términos
+    /// espaciales (`lap`/`avg`/`dir…`) no tienen sentido acá y evalúan a `0`. La semántica
+    /// numérica (división por cero → 0, `clamp` con límites invertidos) coincide con el
+    /// evaluador de opcodes de [`FieldEngine`].
+    pub fn eval_scalar(&self, vars: &[f32], params: &[f32], dt: f32) -> f32 {
+        match self {
+            Expr::Const(c) => *c,
+            Expr::Field(f) => vars.get(*f as usize).copied().unwrap_or(0.0),
+            Expr::Param(p) => params.get(*p as usize).copied().unwrap_or(0.0),
+            Expr::Dt => dt,
+            // Términos espaciales: sin significado para un agente puntual.
+            Expr::Laplacian(_) | Expr::Vecinos(_, _) | Expr::Dir(_, _) => 0.0,
+            Expr::Un(op, a) => {
+                let a = a.eval_scalar(vars, params, dt);
+                match op {
+                    UnOp::Neg => -a,
+                    UnOp::Abs => a.abs(),
+                    UnOp::Exp => a.exp(),
+                    UnOp::Sqrt => a.max(0.0).sqrt(),
+                }
+            }
+            Expr::Bin(op, a, b) => {
+                let l = a.eval_scalar(vars, params, dt);
+                let r = b.eval_scalar(vars, params, dt);
+                match op {
+                    BinOp::Add => l + r,
+                    BinOp::Sub => l - r,
+                    BinOp::Mul => l * r,
+                    BinOp::Div => {
+                        if r == 0.0 {
+                            0.0
+                        } else {
+                            l / r
+                        }
+                    }
+                    BinOp::Min => l.min(r),
+                    BinOp::Max => l.max(r),
+                    BinOp::Gt => (l > r) as i32 as f32,
+                    BinOp::Lt => (l < r) as i32 as f32,
+                }
+            }
+            Expr::Clamp(x, lo, hi) => {
+                let x = x.eval_scalar(vars, params, dt);
+                let lo = lo.eval_scalar(vars, params, dt);
+                let hi = hi.eval_scalar(vars, params, dt);
+                x.clamp(lo.min(hi), lo.max(hi))
+            }
+        }
+    }
+
     // prec: 0 top, 1 suma/cmp, 2 mult, 3 unario/atómico — para poner paréntesis mínimos
     fn print(&self, sym: &Symbols, prec: u8) -> String {
         match self {
@@ -819,6 +873,24 @@ mod tests {
             let e2 = Expr::parse(&printed, &s).expect("re-parsea");
             assert_eq!(e, e2, "round-trip estable para: {c}  →  {printed}");
         }
+    }
+
+    #[test]
+    fn eval_scalar_entorno_plano() {
+        // Las mismas fórmulas que usa una conducta autorable, evaluadas sobre un
+        // entorno de percepts (Field) + params (Param), sin rejilla.
+        let s = sym(&["cercania_amenaza"], &["miedo", "gregario"]);
+        // peso de huida por defecto: miedo * 2.5 * cercania_amenaza
+        let e = Expr::parse("miedo * 2.5 * cercania_amenaza", &s).unwrap();
+        // vars[0]=cercania_amenaza=0.8 ; params: miedo=1, gregario=0.35
+        let w = e.eval_scalar(&[0.8], &[1.0, 0.35], 1.0 / 60.0);
+        assert!((w - 2.0).abs() < 1e-4, "peso={w}");
+        // términos espaciales evalúan a 0 (no rompen).
+        let e2 = Expr::parse("lap(cercania_amenaza) + miedo", &s).unwrap();
+        assert!((e2.eval_scalar(&[0.8], &[1.0, 0.35], 0.0) - 1.0).abs() < 1e-4);
+        // clamp y umbral funcionan igual que en la rejilla.
+        let e3 = Expr::parse("clamp(gregario, 0, 1) + (cercania_amenaza > 0.5)", &s).unwrap();
+        assert!((e3.eval_scalar(&[0.8], &[1.0, 0.35], 0.0) - 1.35).abs() < 1e-4);
     }
 
     #[test]
