@@ -19,8 +19,8 @@ use std::time::Duration;
 use sandokan_core::Engine;
 use sandokan_monitor_core::observe;
 use sandokan_monitor_core::reglas::{
-    aplicar, aplicar_sistema, evaluar_sistema, Disparo, EstadoSistema, MotorMetrico, ReglaMetrica,
-    ReglaSistema,
+    aplicar, aplicar_sistema, evaluar_sistema, Disparo, EstadoSistema, MotorMetrico, MotorTiempo,
+    ReglaMetrica, ReglaSistema, ReglaTiempo,
 };
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
@@ -35,6 +35,9 @@ pub struct Vigilante {
     engine: Arc<dyn Engine>,
     motor: Mutex<MotorMetrico>,
     sistema: Mutex<Vec<ReglaSistema>>,
+    /// Motor de reglas de **tiempo** (cron). Como el de métrica, tiene estado
+    /// (acumuladores/edge) y se reemplaza en caliente con [`armar_tiempo`](Self::armar_tiempo).
+    tiempo: Mutex<MotorTiempo>,
     intervalo: Duration,
 }
 
@@ -46,6 +49,7 @@ impl Vigilante {
             engine,
             motor: Mutex::new(MotorMetrico::new(reglas)),
             sistema: Mutex::new(Vec::new()),
+            tiempo: Mutex::new(MotorTiempo::default()),
             intervalo,
         }
     }
@@ -61,6 +65,34 @@ impl Vigilante {
     /// También parte del armado por intención. `vec![]` desarma.
     pub async fn armar_sistema(&self, reglas: Vec<ReglaSistema>) {
         *self.sistema.lock().await = reglas;
+    }
+
+    /// Reemplaza el set de **reglas de tiempo** activo (cron). Parte del armado
+    /// por intención. `vec![]` desarma (y descarta acumuladores/edge previos).
+    pub async fn armar_tiempo(&self, reglas: Vec<ReglaTiempo>) {
+        *self.tiempo.lock().await = MotorTiempo::new(reglas);
+    }
+
+    /// Evalúa las reglas de **tiempo** dado el `minuto` del día local (`0..1440`)
+    /// que el caller sensó del reloj, avanzando `intervalo` de `dt`, y aplica los
+    /// disparos por el contrato. Devuelve los ids aplicados. Separado de
+    /// [`tick`](Self::tick) porque su entrada es el reloj del borde, no el snapshot.
+    pub async fn tick_tiempo(&self, minuto: u16) -> Vec<String> {
+        let disparos = {
+            let mut motor = self.tiempo.lock().await;
+            motor.evaluar(minuto, self.intervalo)
+        };
+        let mut aplicadas = Vec::with_capacity(disparos.len());
+        for (id, accion) in disparos {
+            match aplicar_sistema(&accion, self.engine.as_ref()).await {
+                Ok(()) => {
+                    debug!(regla = %id, "vigilante: regla de tiempo aplicada");
+                    aplicadas.push(id);
+                }
+                Err(e) => warn!(regla = %id, error = %e, "vigilante: aplicar_tiempo falló"),
+            }
+        }
+        aplicadas
     }
 
     /// Evalúa las reglas de **sistema** contra `estado` (que el caller sensó:
@@ -228,6 +260,26 @@ mod tests {
         let bat = EstadoSistema { en_bateria: true, ..Default::default() };
         assert_eq!(v.tick_sistema(&bat).await, vec!["ahorro".to_string()]);
         assert_eq!(eng.aplicados.lock().unwrap().as_slice(), &["freeze pacha/secundario=true".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn tick_tiempo_dispara_regla_diaria_por_el_contrato() {
+        use sandokan_monitor_core::reglas::{Horario, ReglaTiempo};
+        let eng = Arc::new(MockEngine { id: Ulid::new(), cpu: 5.0, aplicados: StdMutex::new(vec![]) });
+        let v = Vigilante::new(eng.clone(), vec![], Duration::from_secs(1));
+        let objetivo = 2 * 60; // 02:00
+        v.armar_tiempo(vec![ReglaTiempo {
+            id: "nocturna".into(),
+            horario: Horario::DiariaA { minuto_del_dia: objetivo },
+            entonces: AccionControl::Congelar { cgroup_path: "pacha/pesado".into(), frozen: true },
+        }]).await;
+        // Antes del minuto: nada.
+        assert!(v.tick_tiempo(objetivo - 1).await.is_empty());
+        // Al entrar: dispara y congela por el contrato.
+        assert_eq!(v.tick_tiempo(objetivo).await, vec!["nocturna".to_string()]);
+        assert_eq!(eng.aplicados.lock().unwrap().as_slice(), &["freeze pacha/pesado=true".to_string()]);
+        // Mismo minuto: no re-dispara.
+        assert!(v.tick_tiempo(objetivo).await.is_empty());
     }
 
     #[tokio::test]

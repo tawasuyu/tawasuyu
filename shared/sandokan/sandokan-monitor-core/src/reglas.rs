@@ -280,6 +280,87 @@ pub async fn aplicar_sistema(accion: &AccionControl, engine: &dyn Engine) -> Res
     aplicar_accion(accion, None, engine).await
 }
 
+// =====================================================================
+// Reglas de TIEMPO: disparadores por horario (cron)
+// =====================================================================
+
+/// Horario de una regla de tiempo. Como el resto de `reglas`, el evaluador es
+/// **puro**: el caller pasa el minuto-del-día local (`0..1440`) y el `dt` entre
+/// polls — ni mira el reloj ni resuelve zona horaria, igual que las reglas de
+/// métrica reciben el `dt` ya calculado. Es el «cron» del plano de control.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Horario {
+    /// Cada `intervalo`, repetido — acumula el `dt` de cada poll y dispara al
+    /// cruzarlo, restándolo para preservar la fase. `Duration::ZERO` no dispara.
+    CadaIntervalo(Duration),
+    /// Una vez al día al `minuto_del_dia` local (`0..1440`; p.ej. `3*60+30` =
+    /// 03:30). Edge-triggered: dispara al **entrar** en ese minuto, una sola vez
+    /// por visita (no re-dispara en polls sucesivos del mismo minuto).
+    DiariaA { minuto_del_dia: u16 },
+}
+
+/// Regla de tiempo: cuando llega su `horario`, ejecutá `entonces`. Sin unidad
+/// culpable (como las de sistema) — la acción opera sobre un slice
+/// (`Priorizar`/`Congelar`); `Detener` no aplica.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReglaTiempo {
+    pub id: String,
+    pub horario: Horario,
+    pub entonces: AccionControl,
+}
+
+/// Motor **con estado** de reglas de tiempo: acumula el `dt` de cada
+/// `CadaIntervalo` y recuerda el último minuto visto para el edge-trigger de
+/// `DiariaA`. Las reglas son inmutables tras construirlo; sólo el estado cambia.
+#[derive(Debug, Default)]
+pub struct MotorTiempo {
+    reglas: Vec<ReglaTiempo>,
+    acumulado: HashMap<String, Duration>,
+    ultimo_minuto: Option<u16>,
+}
+
+impl MotorTiempo {
+    pub fn new(reglas: Vec<ReglaTiempo>) -> Self {
+        Self { reglas, acumulado: HashMap::new(), ultimo_minuto: None }
+    }
+
+    /// Evalúa las reglas dado el minuto-del-día local `minuto` (`0..1440`) y el
+    /// `dt` transcurrido desde el poll anterior. Devuelve `(id, acción)` por cada
+    /// disparo. Sin unidad culpable → aplicá cada una con [`aplicar_sistema`].
+    pub fn evaluar(&mut self, minuto: u16, dt: Duration) -> Vec<(String, AccionControl)> {
+        let mut out = Vec::new();
+        for i in 0..self.reglas.len() {
+            let id = self.reglas[i].id.clone();
+            let horario = self.reglas[i].horario; // Copy → cierra el préstamo
+            match horario {
+                Horario::CadaIntervalo(iv) => {
+                    let acc = self.acumulado.entry(id.clone()).or_default();
+                    *acc = acc.saturating_add(dt);
+                    if iv > Duration::ZERO && *acc >= iv {
+                        // Restar el intervalo preserva la fase; si el poll fue
+                        // más largo que un intervalo entero, no acumulamos una
+                        // ráfaga: disparamos una vez y truncamos a < iv.
+                        *acc = acc.checked_sub(iv).unwrap_or_default();
+                        if *acc >= iv {
+                            *acc = Duration::ZERO;
+                        }
+                        out.push((id.clone(), self.reglas[i].entonces.clone()));
+                    }
+                }
+                Horario::DiariaA { minuto_del_dia } => {
+                    // Dispara al ENTRAR en el minuto objetivo (no si ya estábamos
+                    // en él el poll anterior) → una vez por visita diaria.
+                    if minuto == minuto_del_dia && self.ultimo_minuto != Some(minuto_del_dia) {
+                        out.push((id, self.reglas[i].entonces.clone()));
+                    }
+                }
+            }
+        }
+        self.ultimo_minuto = Some(minuto);
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,6 +545,75 @@ mod tests {
         // Detener sin unidad (regla de sistema) es Unsupported — no hay a quién parar.
         let err = aplicar_sistema(&AccionControl::Detener { grace_ms: 0 }, &engine).await;
         assert!(matches!(err, Err(sandokan_core::EngineError::Unsupported(_))));
+    }
+
+    // --- reglas de TIEMPO (cron) ---
+    fn regla_cada(id: &str, iv: Duration) -> ReglaTiempo {
+        ReglaTiempo {
+            id: id.into(),
+            horario: Horario::CadaIntervalo(iv),
+            entonces: AccionControl::Priorizar { cgroup_path: "pacha/fondo".into(), weight: 5 },
+        }
+    }
+
+    #[test]
+    fn cada_intervalo_dispara_al_cruzar_y_preserva_fase() {
+        let mut m = MotorTiempo::new(vec![regla_cada("backup", Duration::from_secs(60))]);
+        // 20 + 20 = 40 s < 60 → nada.
+        assert!(m.evaluar(0, Duration::from_secs(20)).is_empty());
+        assert!(m.evaluar(0, Duration::from_secs(20)).is_empty());
+        // +25 = 65 ≥ 60 → dispara una vez; sobra 5 s de fase.
+        let d = m.evaluar(0, Duration::from_secs(25));
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].0, "backup");
+        // 5 (fase) + 50 = 55 < 60 → todavía no.
+        assert!(m.evaluar(0, Duration::from_secs(50)).is_empty());
+        // +10 = 65 ≥ 60 → segundo disparo (repite).
+        assert_eq!(m.evaluar(0, Duration::from_secs(10)).len(), 1);
+    }
+
+    #[test]
+    fn cada_intervalo_poll_largo_no_hace_rafaga() {
+        // Un poll gigante (5×) dispara UNA vez, no cinco.
+        let mut m = MotorTiempo::new(vec![regla_cada("x", Duration::from_secs(60))]);
+        let d = m.evaluar(0, Duration::from_secs(300));
+        assert_eq!(d.len(), 1, "un solo disparo aunque el poll cubra 5 intervalos");
+    }
+
+    #[test]
+    fn diaria_dispara_al_entrar_en_el_minuto_una_vez_por_dia() {
+        // 03:30 = 210 minutos del día.
+        let objetivo = 3 * 60 + 30;
+        let mut m = MotorTiempo::new(vec![ReglaTiempo {
+            id: "nocturna".into(),
+            horario: Horario::DiariaA { minuto_del_dia: objetivo },
+            entonces: AccionControl::Congelar { cgroup_path: "pacha/pesado".into(), frozen: true },
+        }]);
+        let dt = Duration::from_secs(2);
+        // Antes del minuto: nada.
+        assert!(m.evaluar(objetivo - 1, dt).is_empty());
+        // Entra al minuto objetivo → dispara.
+        let d = m.evaluar(objetivo, dt);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].0, "nocturna");
+        // Sigue en el mismo minuto (polls sucesivos) → no re-dispara.
+        assert!(m.evaluar(objetivo, dt).is_empty());
+        // Sale del minuto y al otro día vuelve a entrar → dispara de nuevo.
+        assert!(m.evaluar(objetivo + 1, dt).is_empty());
+        assert!(m.evaluar(objetivo - 1, dt).is_empty()); // otro día, acercándose
+        assert_eq!(m.evaluar(objetivo, dt).len(), 1, "vuelve a disparar al día siguiente");
+    }
+
+    #[tokio::test]
+    async fn regla_de_tiempo_se_aplica_por_el_contrato() {
+        // Un disparo de tiempo viaja por el mismo Engine que todo lo demás.
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let engine = MockEngine { tx };
+        let mut m = MotorTiempo::new(vec![regla_cada("y", Duration::from_secs(1))]);
+        let disparos = m.evaluar(0, Duration::from_secs(2));
+        assert_eq!(disparos.len(), 1);
+        aplicar_sistema(&disparos[0].1, &engine).await.unwrap();
+        assert_eq!(rx.recv().await.unwrap(), Llamada::Weight("pacha/fondo".into(), 5));
     }
 
     #[tokio::test]

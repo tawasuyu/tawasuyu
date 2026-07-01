@@ -340,8 +340,16 @@ verbos+reglas existentes, no los reimplementa.
   + `ReglaSistema` → `evaluar_sistema` (puro) + `aplicar_sistema`; el I/O de
   sensar vive en el borde (el caller pasa el estado, como `energia`). El
   Vigilante los corre en `tick_sistema(estado)` con set hot-swap
-  (`armar_sistema`). **Pendiente de capa 2**: disparadores de **tiempo**
-  (cron/atardecer/boot) — son un *scheduler*, no una condición de snapshot.
+  (`armar_sistema`). **Disparadores de tiempo (cron)** ✅ (2026-07-01):
+  `Horario` (`CadaIntervalo(Duration)` / `DiariaA{minuto_del_dia}`) + `ReglaTiempo`
+  → `MotorTiempo` (con estado: acumula el `dt` de cada poll para el intervalo,
+  edge-trigger por minuto para el diario) — puro, el caller pasa el minuto-del-día
+  local y el `dt` (ni reloj ni zona horaria adentro, como `energia`). El Vigilante
+  lo corre en `tick_tiempo(minuto)` con set hot-swap (`armar_tiempo`); la acción
+  viaja por el mismo contrato vía `aplicar_sistema` (sin unidad culpable). Nota:
+  igual que `tick_sistema`, falta el **driver de producción** que sensa el
+  reloj/batería y llama a estos ticks en el lazo (hoy `correr()` sólo corre el
+  tick de métrica) — pendiente común, no específico del cron.
 - **Lazo vivo** *(2026-06-30)*: `sandokan-vigilante::Vigilante` corre la capa 2 —
   cada `intervalo`: `observe(engine) → MotorMetrico::evaluar → aplicar(&engine)`,
   todo por el contrato. Reglas **hot-swappables** (`armar(reglas)`): el gancho
