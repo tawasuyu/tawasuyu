@@ -590,10 +590,19 @@ impl LayerApp {
         }
         // Mostrar el nuevo (si hay un diente abierto).
         if let Some(si) = want_si {
-            if let Some(pi) = self.drawer_panel_de(si) {
-                self.set_drawer_clickable(pi, true);
-                self.panels[pi].cache = None;
-                self.panels[pi].dirty = true; // se repinta con el contenido.
+            match self.drawer_panel_de(si) {
+                Some(pi) => {
+                    diag!(
+                        "pata diag · reconcile MOSTRAR si={si} → drawer pi={pi} idx={} {}x{}",
+                        self.panels[pi].idx,
+                        self.panels[pi].width,
+                        self.panels[pi].height
+                    );
+                    self.set_drawer_clickable(pi, true);
+                    self.panels[pi].cache = None;
+                    self.panels[pi].dirty = true; // se repinta con el contenido.
+                }
+                None => diag!("pata diag · reconcile MOSTRAR si={si} → SIN drawer (drawer_panel_de=None)"),
             }
         }
         self.drawer_shown_si = want_si;
@@ -602,24 +611,25 @@ impl LayerApp {
     /// Ajusta la input-region del drawer `pi`: `None` (toda la surface recibe input,
     /// drawer abierto) o VACÍA (el puntero lo atraviesa, drawer cerrado).
     ///
-    /// CLAVE: hay que **commitear la surface acá mismo**. `set_input_region` es estado
-    /// double-buffered que sólo se aplica en el próximo `commit`; NO alcanza con
-    /// confiar en el `present` de wgpu (Mesa WSI no arrastra este pending) — así el
-    /// drawer se quedaba con la región VACÍA del arranque incluso abierto, y el
-    /// puntero lo atravesaba siempre. Un commit sin buffer nuevo sólo aplica el
-    /// estado pendiente (la región); no toca el swapchain ni el buffer visible.
+    /// CLAVE (verificado con el diag de mirada): hay que commitear con
+    /// `LayerSurface::commit()` (el commit de sctk), NO con el `wl_surface.commit()`
+    /// crudo. El crudo NO latcheaba la región (mirada seguía viendo la región VACÍA
+    /// del arranque aun con el drawer abierto → `region=VACÍA(atraviesa)` en el log),
+    /// probablemente porque wgpu/Mesa maneja el `wl_surface` por su cuenta. El commit
+    /// de la LayerSurface es el mismo camino que usa el arranque —que SÍ latchea—.
     fn set_drawer_clickable(&self, pi: usize, clickable: bool) {
         use smithay_client_toolkit::compositor::Region;
         use smithay_client_toolkit::shell::WaylandSurface;
-        let surf = self.panels[pi].layer.wl_surface();
+        let layer = &self.panels[pi].layer;
         if clickable {
-            surf.set_input_region(None); // None = toda la surface recibe input.
+            layer.wl_surface().set_input_region(None); // None = toda la surface recibe input.
         } else if let Some(comp) = self.compositor.as_ref() {
             if let Ok(region) = Region::new(comp) {
-                surf.set_input_region(Some(region.wl_region())); // región vacía = atraviesa.
+                layer.wl_surface().set_input_region(Some(region.wl_region())); // vacía = atraviesa.
             }
         }
-        surf.commit(); // aplica la región YA (sin adjuntar buffer nuevo).
+        layer.commit(); // commit de la LayerSurface (latchea la región; el crudo no).
+        diag!("pata diag · set_drawer_clickable pi={pi} clickable={clickable} → commit");
     }
 
     /// Aplica EN VIVO el eje docked de la surface `si`: cambia el `exclusive_zone`

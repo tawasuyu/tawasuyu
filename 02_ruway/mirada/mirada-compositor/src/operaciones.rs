@@ -30,10 +30,43 @@ impl App {
                     continue;
                 }
                 let origin = Point::<f64, Logical>::from((geo.loc.x as f64, geo.loc.y as f64));
-                if layer
-                    .surface_under(point - origin, WindowSurfaceType::ALL)
-                    .is_some()
-                {
+                let hit = layer.surface_under(point - origin, WindowSurfaceType::ALL);
+                if hit.is_none() && std::env::var_os("MIRADA_DIAG").is_some() {
+                    // DIAG (gateado por MIRADA_DIAG; si no, silencioso — este caso
+                    // dispara con el puntero sobre cualquier layer click-through, p.ej.
+                    // un drawer cerrado, así que spamearía). Volcamos geo/bbox/rel + el
+                    // estado de la input-region para distinguir de un vistazo:
+                    //   region=null  → mirada NO rutea aunque el cliente acepta input
+                    //                   (bug de geometría/surface_view en el compositor).
+                    //   region=vacía → el cliente (pata) NO latcheó null al abrir
+                    //                   (bug de commit en pata).
+                    let b = layer.bbox();
+                    let region = smithay::wayland::compositor::with_states(
+                        layer.wl_surface(),
+                        |states| {
+                            states
+                                .cached_state
+                                .get::<smithay::wayland::compositor::SurfaceAttributes>()
+                                .current()
+                                .input_region
+                                .as_ref()
+                                .map(|r| r.rects.len())
+                        },
+                    );
+                    let region_str = match region {
+                        None => "null(acepta-todo)".to_string(),
+                        Some(0) => "VACÍA(atraviesa)".to_string(),
+                        Some(n) => format!("{n}-rects"),
+                    };
+                    dlog!(
+                        "layer_under@({x:.0},{y:.0}) DECLINA «{}» geo=({},{},{}x{}) bbox=({},{},{}x{}) rel=({},{}) region={region_str}",
+                        layer.namespace(),
+                        geo.loc.x, geo.loc.y, geo.size.w, geo.size.h,
+                        b.loc.x, b.loc.y, b.size.w, b.size.h,
+                        (point.x - origin.x) as i32, (point.y - origin.y) as i32
+                    );
+                }
+                if hit.is_some() {
                     return Some((layer.wl_surface().clone(), origin));
                 }
             }
