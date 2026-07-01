@@ -726,6 +726,47 @@
     }
 
     #[test]
+    fn expandir_seleccion_por_mascara_conserva_forma() {
+        // Máscara diagonal (0,0)+(3,3) en 4×4: expandir la crece sin degradar
+        // a rect; la selección sigue siendo por máscara.
+        let mut model = modelo_minimo();
+        let mut mask = vec![0u8; 16];
+        mask[0] = 255;
+        mask[3 * 4 + 3] = 255;
+        let mh = model.almacen.insertar(mask);
+        model.seleccion_mascara = Some(mh);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 4, y1: 4 });
+        model = <Tullpu as App>::update(model, Msg::ExpandirSeleccion(1), &Handle::for_test());
+        assert!(model.seleccion_mascara.is_some(), "sigue siendo selección por máscara");
+        let cov = cobertura_seleccion(&model).unwrap();
+        // El punto (0,0) dilatado gana (1,0),(0,1),(1,1); (3,3) gana (2,3) etc.
+        assert_eq!(cov[1], 255, "(1,0) ganado por expansión");
+        assert_eq!(cov[1 * 4 + 1], 255, "(1,1) ganado");
+        assert_eq!(cov[3 * 4 + 2], 255, "(2,3) ganado alrededor de (3,3)");
+        // Un hueco lejano de ambos puntos sigue sin seleccionar.
+        assert_eq!(cov[1 * 4 + 3], 0, "(3,1) lejos de ambos, sin seleccionar");
+    }
+
+    #[test]
+    fn contraer_seleccion_por_mascara_hasta_vaciar_la_limpia() {
+        let mut model = modelo_minimo();
+        // Bloque 2×2 en la esquina.
+        let mut mask = vec![0u8; 16];
+        for y in 0..2 {
+            for x in 0..2 {
+                mask[y * 4 + x] = 255;
+            }
+        }
+        let mh = model.almacen.insertar(mask);
+        model.seleccion_mascara = Some(mh);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 2, y1: 2 });
+        // Contraer 2 px vacía un bloque 2×2.
+        model = <Tullpu as App>::update(model, Msg::ExpandirSeleccion(-2), &Handle::for_test());
+        assert!(model.seleccion.is_none(), "contracción total limpia el rect");
+        assert!(model.seleccion_mascara.is_none(), "y la máscara");
+    }
+
+    #[test]
     fn lazo_poligonal_acumula_y_cierra_cerca_del_inicio() {
         // Lienzo 4×4 a zoom 1 en rect 4×4 → click (lx,ly) mapea a floor(lx,ly).
         let click = |m: Model, lx: f32, ly: f32| {

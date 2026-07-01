@@ -101,6 +101,7 @@ pub(crate) use tullpu_paint::{
     flood_mascara,
     limpiar_rect_en_buffer,
     mascara_por_color_global,
+    morfologia_mascara,
     poligono_a_mascara,
     recortar_buffer,
     recortar_buffer_bpp,
@@ -2434,6 +2435,42 @@ pub(crate) fn invertir_seleccion(model: &mut Model) -> bool {
     model.seleccion = Some(bbox);
     sincronizar_overlay_seleccion(model);
     model.estado = format!("selección invertida · {count} px");
+    true
+}
+
+/// Expande (`delta > 0`) o contrae (`delta < 0`) una selección **por máscara**
+/// vía morfología ([`morfologia_mascara`]), conservando su forma irregular en
+/// vez de degradar a rect. Devuelve `false` (dejando la selección intacta) si no
+/// hay máscara irregular vigente — ese caso lo maneja el path rectangular
+/// (`expandir_rect`) del handler. Si la contracción vacía la selección, la limpia.
+pub(crate) fn expandir_seleccion_mascara(model: &mut Model, delta: i32) -> bool {
+    let Some(hm) = model.seleccion_mascara else {
+        return false;
+    };
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let n = (w as usize) * (h as usize);
+    let Some(cov) = model.almacen.obtener(hm).filter(|b| b.len() == n).map(|b| b.to_vec()) else {
+        return false;
+    };
+    let crecida = morfologia_mascara(&cov, w, h, delta);
+    match bbox_de_mascara(&crecida, w, h) {
+        Some(bbox) => {
+            let count = crecida.iter().filter(|&&v| v > 0).count();
+            let hash = model.almacen.insertar(crecida);
+            model.seleccion_mascara = Some(hash);
+            model.seleccion = Some(bbox);
+            sincronizar_overlay_seleccion(model);
+            let verbo = if delta >= 0 { "expandida" } else { "contraída" };
+            model.estado = format!("selección {verbo} · {count} px");
+        }
+        None => {
+            model.seleccion = None;
+            model.seleccion_mascara = None;
+            model.seleccion_overlay = None;
+            model.estado = "selección contraída · vacía".into();
+        }
+    }
     true
 }
 

@@ -536,6 +536,51 @@ pub fn desenfocar_mascara(src: &[u8], w: u32, h: u32, r: u32) -> Vec<u8> {
     out
 }
 
+/// Morfología de máscara: **dilata** (`radio > 0`) o **erosiona** (`radio < 0`)
+/// una máscara de un canal `w × h` con un elemento estructurante cuadrado de
+/// lado `2·|radio|+1`, con extensión de borde por clamp. Separable en dos
+/// pasadas (horizontal + vertical) de `max` (dilatar) o `min` (erosionar) — es
+/// la contraparte por-máscara de "Expandir/Contraer selección". Sobre máscaras
+/// binarias crece/encoge la región `|radio|` px; con cobertura parcial toma el
+/// extremo del vecindario. `radio == 0` devuelve una copia. Pura.
+pub fn morfologia_mascara(src: &[u8], w: u32, h: u32, radio: i32) -> Vec<u8> {
+    if radio == 0 || w == 0 || h == 0 {
+        return src.to_vec();
+    }
+    let w = w as usize;
+    let h = h as usize;
+    let r = radio.unsigned_abs() as i32;
+    let dilatar = radio > 0;
+    // `extremo`: max para dilatar (la región gana terreno), min para erosionar.
+    let extremo = |a: u8, b: u8| if dilatar { a.max(b) } else { a.min(b) };
+    // Pasada horizontal.
+    let mut tmp = vec![0u8; w * h];
+    for y in 0..h {
+        let fila = y * w;
+        for x in 0..w {
+            let mut acc = src[fila + x];
+            for d in -r..=r {
+                let xx = (x as i32 + d).clamp(0, w as i32 - 1) as usize;
+                acc = extremo(acc, src[fila + xx]);
+            }
+            tmp[fila + x] = acc;
+        }
+    }
+    // Pasada vertical.
+    let mut out = vec![0u8; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let mut acc = tmp[y * w + x];
+            for d in -r..=r {
+                let yy = (y as i32 + d).clamp(0, h as i32 - 1) as usize;
+                acc = extremo(acc, tmp[yy * w + x]);
+            }
+            out[y * w + x] = acc;
+        }
+    }
+    out
+}
+
 /// Traslada una máscara de un canal `w × h` por el offset con signo `(dx, dy)`
 /// sobre un lienzo del mismo tamaño: `dst(x, y) = src(x − dx, y − dy)`. Lo que
 /// entra desde afuera queda en 0 y lo que sale del lienzo se descarta. Es la
@@ -1272,6 +1317,25 @@ mod tests {
         assert_eq!(contigua, vec![255, 0, 0, 0], "flood corta en el azul");
         // Semilla fuera → None.
         assert!(mascara_por_color_global(&src, 4, 1, 9, 0, 0).is_none());
+    }
+
+    #[test]
+    fn morfologia_dilata_y_erosiona() {
+        // 5×5 con un solo píxel central marcado.
+        let mut m = vec![0u8; 25];
+        m[2 * 5 + 2] = 255;
+        // Dilatar r=1 → cruz/cuadrado 3×3 alrededor del centro.
+        let dil = morfologia_mascara(&m, 5, 5, 1);
+        assert_eq!(dil[1 * 5 + 1], 255, "(1,1) ganado por dilatación");
+        assert_eq!(dil[3 * 5 + 3], 255, "(3,3) ganado por dilatación");
+        assert_eq!(dil[0], 0, "esquina lejana sigue vacía");
+        // Erosionar el dilatado r=1 vuelve (casi) al punto: sólo el centro del
+        // bloque 3×3 sobrevive a min sobre su vecindario.
+        let ero = morfologia_mascara(&dil, 5, 5, -1);
+        assert_eq!(ero[2 * 5 + 2], 255, "centro sobrevive a la erosión");
+        assert_eq!(ero[1 * 5 + 1], 0, "borde del bloque erosionado");
+        // r=0 es identidad.
+        assert_eq!(morfologia_mascara(&m, 5, 5, 0), m);
     }
 
     #[test]

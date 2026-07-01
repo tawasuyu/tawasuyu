@@ -669,7 +669,11 @@ impl App for Tullpu {
                 }
             }
             Msg::ExpandirSeleccion(delta) => {
-                if let Some(rect) = model.seleccion {
+                // Selección por máscara: expandir/contraer conservando la forma
+                // (morfología). Sólo cae al path rectangular si no hay máscara.
+                if expandir_seleccion_mascara(&mut model, delta) {
+                    // ya actualizó estado/selección
+                } else if let Some(rect) = model.seleccion {
                     let w = model.lienzo.width;
                     let h = model.lienzo.height;
                     model.seleccion = expandir_rect(rect, delta, w, h);
