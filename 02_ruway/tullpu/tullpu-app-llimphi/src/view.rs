@@ -928,6 +928,20 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         },
         Msg::CambiarHerramienta(Herramienta::Lazo),
     )));
+    let etiqueta_lazo_poli = if model.herramienta == Herramienta::LazoPoligonal {
+        "● lazo poli (L)"
+    } else {
+        "○ lazo poli (L)"
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_lazo_poli.to_string(),
+        if model.herramienta == Herramienta::LazoPoligonal {
+            &pal_tool_activo
+        } else {
+            &pal
+        },
+        Msg::CambiarHerramienta(Herramienta::LazoPoligonal),
+    )));
     let etiqueta_texto = if model.herramienta == Herramienta::Texto {
         "● texto (t)"
     } else {
@@ -1711,6 +1725,9 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
             // sobre el composite con el mismo transform del lienzo.
             let transform_libre = model.transform.clone();
             let snap_grid = model.snap_grid;
+            // Vértices del lazo poligonal en curso (coords-imagen): se dibujan
+            // como polilínea + puntos para guiar el clickeo.
+            let lazo_poli = model.lazo_poli.clone();
             // Anclas de la capa vectorial en edición con la pluma: se dibujan
             // como handles para mover puntos. Capturamos sus coords-imagen.
             let capa_vec_edicion = model
@@ -1876,6 +1893,35 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                         scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, Color::from_rgba8(0, 0, 0, 220), None, &hr);
                     }
                 }
+                // Lazo poligonal en curso: polilínea entre vértices + un punto
+                // por vértice; el primero resaltado (click cerca cierra). Se
+                // dibuja con el mismo transform del lienzo.
+                if let Some(pts) = lazo_poli.as_ref() {
+                    if !pts.is_empty() {
+                        let punto_pant = |p: &(i32, i32)| {
+                            Point::new(tx + (p.0 as f64 + 0.5) * s, ty + (p.1 as f64 + 0.5) * s)
+                        };
+                        // Segmentos entre vértices consecutivos (doble stroke).
+                        for par in pts.windows(2) {
+                            let a = punto_pant(&par[0]);
+                            let b = punto_pant(&par[1]);
+                            scene.stroke(&Stroke::new(2.5), Affine::IDENTITY, Color::from_rgba8(0, 0, 0, 180), None, &Line::new(a, b));
+                            scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, Color::from_rgba8(40, 180, 255, 255), None, &Line::new(a, b));
+                        }
+                        // Puntos: el primero más grande y cálido (objetivo de cierre).
+                        for (i, p) in pts.iter().enumerate() {
+                            let c = punto_pant(p);
+                            let (rr, col) = if i == 0 {
+                                (5.0_f64, Color::from_rgba8(255, 210, 90, 255))
+                            } else {
+                                (3.5_f64, Color::from_rgba8(40, 180, 255, 255))
+                            };
+                            let circ = Circle::new(c, rr);
+                            scene.fill(Fill::NonZero, Affine::IDENTITY, col, None, &circ);
+                            scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, Color::from_rgba8(0, 0, 0, 220), None, &circ);
+                        }
+                    }
+                }
                 // Cuadro de transformación libre: marco (posiblemente rotado),
                 // 8 handles cuadrados de escala y el handle de rotación.
                 if let Some(t) = transform_libre.as_ref() {
@@ -1952,6 +1998,8 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                         DragPhase::Move => Some(Msg::ContinuarLazo { dx, dy }),
                         DragPhase::End => Some(Msg::FinalizarLazo),
                     }),
+                Herramienta::LazoPoligonal => cuerpo_paint
+                    .on_click_at(|lx, ly, rw, rh| Some(Msg::LazoPoliPunto { lx, ly, rw, rh })),
                 Herramienta::Texto => cuerpo_paint.on_click_at(|lx, ly, rw, rh| {
                     Some(Msg::AgregarTexto { lx, ly, rw, rh })
                 }),

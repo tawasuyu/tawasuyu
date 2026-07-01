@@ -726,6 +726,52 @@
     }
 
     #[test]
+    fn lazo_poligonal_acumula_y_cierra_cerca_del_inicio() {
+        // Lienzo 4×4 a zoom 1 en rect 4×4 → click (lx,ly) mapea a floor(lx,ly).
+        let click = |m: Model, lx: f32, ly: f32| {
+            <Tullpu as App>::update(
+                m,
+                Msg::LazoPoliPunto { lx, ly, rw: 4.0, rh: 4.0 },
+                &Handle::for_test(),
+            )
+        };
+        let mut model = modelo_minimo();
+        model = click(model, 0.5, 0.5); // (0,0)
+        model = click(model, 3.5, 0.5); // (3,0)
+        model = click(model, 3.5, 3.5); // (3,3)
+        assert_eq!(model.lazo_poli.as_ref().unwrap().len(), 3, "3 vértices acumulados");
+        assert!(model.seleccion_mascara.is_none(), "polígono aún abierto");
+        // Cuarto click cerca del primer vértice cierra y rasteriza.
+        model = click(model, 0.4, 0.4); // → (0,0), cerca del inicio
+        assert!(model.lazo_poli.is_none(), "click cerca del inicio cierra");
+        assert!(model.seleccion_mascara.is_some(), "cerró a máscara de selección");
+    }
+
+    #[test]
+    fn lazo_poligonal_enter_cierra_y_esc_cancela() {
+        let mut model = modelo_minimo();
+        model.lazo_poli = Some(vec![(0, 0), (3, 0), (0, 3)]);
+        model = <Tullpu as App>::update(model, Msg::LazoPoliCerrar, &Handle::for_test());
+        assert!(model.lazo_poli.is_none(), "Enter consume el polígono");
+        assert!(model.seleccion_mascara.is_some(), "Enter cierra a selección");
+        // Esc con polígono en curso descarta sin seleccionar.
+        let mut model = modelo_minimo();
+        model.lazo_poli = Some(vec![(0, 0), (3, 0), (0, 3)]);
+        model = <Tullpu as App>::update(model, Msg::LazoPoliCancelar, &Handle::for_test());
+        assert!(model.lazo_poli.is_none());
+        assert!(model.seleccion_mascara.is_none(), "Esc no crea selección");
+    }
+
+    #[test]
+    fn lazo_poligonal_cerrar_con_menos_de_tres_no_selecciona() {
+        let mut model = modelo_minimo();
+        model.lazo_poli = Some(vec![(0, 0), (3, 0)]);
+        model = <Tullpu as App>::update(model, Msg::LazoPoliCerrar, &Handle::for_test());
+        assert!(model.lazo_poli.is_none());
+        assert!(model.seleccion_mascara.is_none(), "2 vértices no forman polígono");
+    }
+
+    #[test]
     fn feather_cobertura_parcial_mezcla_al_limpiar() {
         // Máscara con un píxel de cobertura media (128): limpiar debe mezclar
         // proporcionalmente, no aplicar/omitir por umbral.

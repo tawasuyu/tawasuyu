@@ -285,6 +285,7 @@ pub(crate) fn inicializar() -> Model {
         simetria: Simetria::Ninguna,
         gradiente_drag: None,
         lazo_drag: None,
+        lazo_poli: None,
         editando_texto: None,
         pluma_capa: None,
         pluma_ancla: None,

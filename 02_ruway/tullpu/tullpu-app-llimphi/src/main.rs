@@ -1358,6 +1358,48 @@ impl App for Tullpu {
                     seleccionar_lazo(&mut model, &l.puntos);
                 }
             }
+            Msg::LazoPoliPunto { lx, ly, rw, rh } => {
+                let punto = local_a_imagen(
+                    lx, ly, rw, rh,
+                    model.lienzo.width, model.lienzo.height,
+                    model.factor_zoom, model.pan_x, model.pan_y,
+                )
+                .map(|(ix, iy)| (ix.floor() as i32, iy.floor() as i32));
+                if let Some(p) = punto {
+                    let mut pts = model.lazo_poli.take().unwrap_or_default();
+                    // Con ≥3 vértices, un click cerca del primero cierra el polígono.
+                    let cerca_inicio = pts.len() >= 3
+                        && pts.first().is_some_and(|&(fx, fy)| {
+                            (p.0 - fx).abs() <= 2 && (p.1 - fy).abs() <= 2
+                        });
+                    if cerca_inicio {
+                        seleccionar_lazo(&mut model, &pts);
+                    } else {
+                        if pts.last() != Some(&p) {
+                            pts.push(p);
+                        }
+                        model.estado = format!(
+                            "lazo poligonal · {} vértices (Enter cierra)",
+                            pts.len()
+                        );
+                        model.lazo_poli = Some(pts);
+                    }
+                }
+            }
+            Msg::LazoPoliCerrar => {
+                if let Some(pts) = model.lazo_poli.take() {
+                    if pts.len() >= 3 {
+                        seleccionar_lazo(&mut model, &pts);
+                    } else {
+                        model.estado = "lazo poligonal · muy pocos vértices".into();
+                    }
+                }
+            }
+            Msg::LazoPoliCancelar => {
+                if model.lazo_poli.take().is_some() {
+                    model.estado = "lazo poligonal cancelado".into();
+                }
+            }
             Msg::AgregarMascara => {
                 if agregar_mascara(&mut model) {
                     pushear_snapshot(&mut model, None);
@@ -1776,6 +1818,14 @@ impl App for Tullpu {
             match &event.key {
                 Key::Named(NamedKey::Enter) => return Some(Msg::ConfirmarTransform),
                 Key::Named(NamedKey::Escape) => return Some(Msg::CancelarTransform),
+                _ => {}
+            }
+        }
+        // Lazo poligonal en curso: Enter cierra el polígono, Escape lo cancela.
+        if model.lazo_poli.is_some() && event.state == KeyState::Pressed {
+            match &event.key {
+                Key::Named(NamedKey::Enter) => return Some(Msg::LazoPoliCerrar),
+                Key::Named(NamedKey::Escape) => return Some(Msg::LazoPoliCancelar),
                 _ => {}
             }
         }

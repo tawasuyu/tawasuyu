@@ -141,6 +141,10 @@ pub(crate) struct Model {
     /// acumulada + dims del panel + los vértices recogidos en coords-imagen.
     /// `None` fuera de un drag. Al soltar se rasteriza a `seleccion_mascara`.
     pub(crate) lazo_drag: Option<LazoDrag>,
+    /// Vértices acumulados del lazo poligonal (coords-imagen). `None` = no hay
+    /// polígono en curso; `Some` mientras se clickean vértices. Enter/click cerca
+    /// del inicio lo cierra vía `seleccionar_lazo`; Esc lo descarta.
+    pub(crate) lazo_poli: Option<Vec<(i32, i32)>>,
     /// Edición de capa de texto en curso: `(uuid, input)`. Mientras es `Some`,
     /// el panel de ops muestra el text-input y las teclas editan el contenido
     /// (re-rasterizando en vivo). Enter/Escape lo cierra.
@@ -324,6 +328,10 @@ pub(crate) enum Herramienta {
     /// máscara de selección (lazo). Reusa la misma maquinaria de máscara que
     /// la varita.
     Lazo,
+    /// Lazo poligonal: cada click agrega un vértice; Enter (o click cerca del
+    /// primer vértice) cierra el polígono y lo rasteriza a máscara; Esc cancela.
+    /// Comparte `seleccionar_lazo` con el lazo a mano alzada.
+    LazoPoligonal,
     /// Click crea una capa de texto en esa posición y entra en edición; lo que
     /// se tipea se rasteriza en vivo a la capa.
     Texto,
@@ -353,6 +361,7 @@ impl Herramienta {
             Herramienta::Degradado => "degradé",
             Herramienta::Varita => "varita",
             Herramienta::Lazo => "lazo",
+            Herramienta::LazoPoligonal => "lazo poligonal",
             Herramienta::Texto => "texto",
             Herramienta::Clonar => "clonar",
             Herramienta::Sanar => "sanar",
@@ -743,6 +752,13 @@ pub(crate) enum Msg {
     /// Alterna el modo de la varita mágica entre contigua y global (por color
     /// en todo el lienzo). No toca la selección vigente.
     ToggleVaritaContigua,
+    /// Lazo poligonal: agrega un vértice en el punto clickeado. Si ya hay ≥3 y
+    /// el click cae cerca del primer vértice, cierra el polígono.
+    LazoPoliPunto { lx: f32, ly: f32, rw: f32, rh: f32 },
+    /// Cierra el polígono del lazo poligonal (Enter): lo rasteriza a selección.
+    LazoPoliCerrar,
+    /// Descarta el polígono en curso del lazo poligonal (Esc).
+    LazoPoliCancelar,
     /// Arma una selección que cubre el lienzo entero (`(0,0)..(w,h)`).
     /// No toca píxeles ni el historial. No-op si el lienzo es degenerado.
     SeleccionarTodo,

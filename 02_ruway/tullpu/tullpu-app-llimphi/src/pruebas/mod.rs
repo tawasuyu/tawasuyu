@@ -90,6 +90,7 @@ mod grupo_06;
             simetria: Simetria::Ninguna,
             gradiente_drag: None,
             lazo_drag: None,
+            lazo_poli: None,
             editando_texto: None,
             portapapeles: None,
             editando_mascara: false,
