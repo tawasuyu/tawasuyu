@@ -174,14 +174,42 @@ impl DrmState {
 
         let mut changed = false;
 
-        // 1 · Desenchufes — drop OutputCtx + remove_output al Brain.
-        let to_remove: Vec<usize> = self
-            .outputs
-            .iter()
-            .enumerate()
-            .filter(|(_, o)| !live_names.contains(o.name.as_str()))
-            .map(|(i, _)| i)
-            .collect();
+        // 1 · Desenchufes — drop OutputCtx + remove_output al Brain. ANTES de
+        // dropear confirmamos el desenchufe con un probe FORZADO del conector: la
+        // lista `live` se arma con lecturas CACHEADAS (`get_connector(h, false)`),
+        // que en el churn de modeset de Iris Xe reportan el conector como
+        // Disconnected de forma transitoria (y el panel eDP de una laptop NO se
+        // puede desenchufar). Un probe forzado (`true`) re-consulta el hardware y
+        // no se deja engañar por ese estado espurio; sólo dropeamos si TAMBIÉN dice
+        // Disconnected (desenchufe real). Sin esto, cada falso desenchufe destruía
+        // el `wl_output` y smithay mandaba `closed` a las barras layer-shell (pata
+        // moría con exit 0, «destranques» crónicos). Ver `pata-layer-closed`.
+        let mut to_remove: Vec<usize> = Vec::new();
+        for (i, o) in self.outputs.iter().enumerate() {
+            if live_names.contains(o.name.as_str()) {
+                continue;
+            }
+            let confirmado = match self.drm.get_connector(o.connector, true) {
+                Ok(c) => c.state() != ConnectorState::Connected,
+                // Si el probe forzado falla, conservador: NO dropear (mejor una
+                // barra viva de más que matarla por un error de lectura).
+                Err(e) => {
+                    eprintln!(
+                        "mirada-compositor · hotplug · probe forzado de «{}» falló ({e}) — se conserva",
+                        o.name
+                    );
+                    false
+                }
+            };
+            if confirmado {
+                to_remove.push(i);
+            } else {
+                println!(
+                    "mirada-compositor · hotplug · «{}» reportó desenchufe transitorio (probe forzado = Connected) — se conserva",
+                    o.name
+                );
+            }
+        }
         for &i in to_remove.iter().rev() {
             let name = self.outputs[i].name.clone();
             println!("mirada-compositor · hotplug · monitor «{name}» desenchufado");
