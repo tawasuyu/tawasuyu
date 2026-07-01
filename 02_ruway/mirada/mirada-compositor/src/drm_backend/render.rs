@@ -240,13 +240,12 @@ impl DrmState {
             self.app.pending_thumbs = false;
         }
         // Hero de lock: al enganchar el candado, congelá la escena viva en una
-        // textura y arrancá la transición de **zoom-in** (la pantalla viva crece
-        // hacia el usuario mientras el velo sube, antes de revelar el greeter).
-        // La captura necesita el renderer (vive acá, no en `App`).
+        // textura y arrancá la transición que la encoge hasta el thumbnail. La
+        // captura necesita el renderer (vive acá, no en `App`).
         if self.app.pending_hero {
             if let Some(tex) = crate::thumbs::capturar_output(&self.app, &mut self.renderer) {
                 let (ow, oh) = self.app.output_size;
-                let target = mirada_layout::zoom_in_rect(ow, oh);
+                let target = mirada_layout::landing_rect(ow, oh);
                 self.hero_frozen = Some(tex);
                 self.app.hero = Some(crate::hero::LockHero::new(target));
                 self.hero_prev_ms = Some(self.start.elapsed().as_millis() as u32);
@@ -255,17 +254,33 @@ impl DrmState {
             // hero: el lock cae al corte seco de siempre.
             self.app.pending_hero = false;
         }
-        // Avanzá el hero por el dt real del frame; al completar el encogido se
-        // descarta (la captura y el reloj) y el greeter queda revelado.
+        // Hero de deslock: al desbloquear, si el lock dejó una captura congelada
+        // retenida, arrancá la transición inversa (crece del thumbnail a pantalla
+        // completa, velo bajando) reusándola. Sin captura → corte seco de siempre.
+        if self.app.pending_unlock_hero {
+            if self.hero_frozen.is_some() {
+                let (ow, oh) = self.app.output_size;
+                let target = mirada_layout::landing_rect(ow, oh);
+                self.app.hero = Some(crate::hero::LockHero::new_unlock(target));
+                self.hero_prev_ms = Some(self.start.elapsed().as_millis() as u32);
+            }
+            self.app.pending_unlock_hero = false;
+        }
+        // Avanzá el hero por el dt real del frame; al completar se descarta el reloj.
+        // Al terminar un LOCK retenemos la captura (para el deslock); al terminar un
+        // DESLOCK la descartamos (la sesión viva ya está revelada).
         if let Some(hero) = self.app.hero.as_mut() {
             let now_ms = self.start.elapsed().as_millis() as u32;
             let prev = self.hero_prev_ms.unwrap_or(now_ms);
             self.hero_prev_ms = Some(now_ms);
             let dt = now_ms.saturating_sub(prev) as f32 / 1000.0;
             if hero.advance(dt) {
+                let unlock = hero.is_unlock();
                 self.app.hero = None;
-                self.hero_frozen = None;
                 self.hero_prev_ms = None;
+                if unlock {
+                    self.hero_frozen = None;
+                }
             }
         }
         // Avanzá la transición CRT (apagado/encendido «TV antigua»). `render_output`
@@ -2996,9 +3011,9 @@ impl DrmState {
     /// no a esta salida (gates por dueño) — el cursor en la del puntero,
     /// HUD/layer-shell/reveal-band en primaria, menú y zonas en la salida
     /// donde se inició la acción, ventanas y wallpaper en todas.
-    /// **Hero de lock**: si hay una transición viva, pinta la captura congelada
-    /// del output haciendo **zoom-in** (creciendo más allá del marco, con un velo
-    /// oscuro detrás que sube). Se emite temprano en el orden front-to-back (bajo el
+    /// **Hero de lock/deslock**: si hay una transición viva, pinta la captura
+    /// congelada del output encogiéndose al thumbnail (lock) o creciendo de vuelta
+    /// (deslock), con un velo oscuro detrás. Se emite temprano en el orden front-to-back (bajo el
     /// cursor), por ENCIMA del greeter/ventanas. No-op sin transición → el camino
     /// normal queda byte-idéntico.
     fn emit_hero(&mut self, rect: Rect, into: &mut Vec<Frame>) {
@@ -3013,11 +3028,10 @@ impl DrmState {
         if dst.w <= 0 || dst.h <= 0 {
             return;
         }
-        // La captura se ancla en (dst.x,dst.y) y el `RescaleRenderElement` la
-        // lleva al tamaño dst alrededor de ese origen (escala uniforme = dst/full,
-        // válida porque `zoom_in_rect` preserva el aspecto). En zoom-in dst > full
-        // y (dst.x,dst.y) es negativo → la captura crece centrada y la salida
-        // recorta los bordes.
+        // La captura cubre el output entero anclada en (dst.x,dst.y); el
+        // `RescaleRenderElement` la lleva al tamaño dst alrededor de ese origen
+        // (escala uniforme = dst/full, válida porque `landing_rect`/`full`
+        // preservan el aspecto). El contenido entero queda metido dentro de dst.
         let ctxid = self.renderer.context_id();
         let el = TextureRenderElement::from_static_texture(
             Id::new(),

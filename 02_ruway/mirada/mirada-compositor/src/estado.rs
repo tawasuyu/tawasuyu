@@ -726,8 +726,14 @@ pub(crate) struct App {
     /// lo consume el próximo frame del backend DRM, que congela el output en una
     /// textura y arranca [`hero`](Self::hero). Ver [`crate::hero`].
     pub(crate) pending_hero: bool,
-    /// Progreso vivo del hero de lock (`None` = sin transición). Lo avanza el
-    /// frame del backend DRM y se descarta al completar el encogido.
+    /// **Hero de deslock**: pedido de arrancar la transición inversa (la captura
+    /// congelada creciendo del thumbnail a pantalla completa — zoom-in de vuelta
+    /// a la sesión). Lo enciende [`unlock`](crate::App::unlock) y lo consume el
+    /// próximo frame del backend DRM reusando la captura que el lock dejó
+    /// retenida. Sin captura (lock sin hero) → corte seco.
+    pub(crate) pending_unlock_hero: bool,
+    /// Progreso vivo del hero de lock/deslock (`None` = sin transición). Lo avanza
+    /// el frame del backend DRM y se descarta al completar.
     pub(crate) hero: Option<crate::hero::LockHero>,
     /// Progreso vivo de la transición **CRT** (apagado/encendido «TV antigua» de
     /// la pantalla por inactividad), o `None`. La arranca el `tick` del backend

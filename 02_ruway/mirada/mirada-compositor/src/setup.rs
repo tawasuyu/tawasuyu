@@ -524,6 +524,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         greeter_stdin: None,
         pending_thumbs: false,
         pending_hero: false,
+        pending_unlock_hero: false,
         hero: None,
         crt: None,
         greeter_active_output: usize::MAX,

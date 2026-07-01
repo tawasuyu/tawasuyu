@@ -2331,6 +2331,11 @@ impl App {
             return;
         }
         self.mode = BodyMode::Session;
+        // Pedí el hero de deslock: la captura congelada que el lock retuvo crece
+        // de vuelta del thumbnail a pantalla completa (zoom-in) mientras el velo
+        // baja. Lo arranca el próximo frame del backend DRM; sin captura retenida
+        // (lock que no animó) es no-op y el desbloqueo cae al corte seco.
+        self.pending_unlock_hero = true;
         // Dejamos de empujarle la disposición de monitores al shell que se va.
         self.greeter_stdin = None;
         dlog!("mirada-compositor · sesión desbloqueada.");
