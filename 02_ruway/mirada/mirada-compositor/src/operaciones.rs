@@ -10,15 +10,32 @@ impl App {
     /// ruteo del puntero para que los clicks lleguen a las barras, no sólo a las
     /// ventanas.
     pub(crate) fn layer_under(&self, x: f64, y: f64) -> Option<(WlSurface, Point<f64, Logical>)> {
+        use smithay::desktop::WindowSurfaceType;
         let output = self.output.as_ref()?;
         let map = layer_map_for_output(output);
+        let point = Point::<f64, Logical>::from((x, y));
         for kind in [Layer::Overlay, Layer::Top] {
-            if let Some(layer) = map.layer_under(kind, (x, y)) {
-                let geo = map.layer_geometry(layer)?;
-                return Some((
-                    layer.wl_surface().clone(),
-                    Point::from((geo.loc.x as f64, geo.loc.y as f64)),
-                ));
+            // Topmost-primero: gana la primera layer cuyo punto caiga dentro de su
+            // **input-region** (no del bbox del buffer). Honrar la input-region via
+            // `surface_under` es lo que permite que una layer con región de input
+            // VACÍA —el drawer CERRADO de `pata`, o cualquier overlay transparente
+            // click-through— se ATRAVIESE hacia lo de atrás en vez de tragarse el
+            // clic. Con `map.layer_under` (bbox) una surface transparente de pantalla
+            // completa mataba todo el input aunque no quisiera recibirlo.
+            for layer in map.layers_on(kind).rev() {
+                let Some(geo) = map.layer_geometry(layer) else {
+                    continue;
+                };
+                if !geo.to_f64().contains(point) {
+                    continue;
+                }
+                let origin = Point::<f64, Logical>::from((geo.loc.x as f64, geo.loc.y as f64));
+                if layer
+                    .surface_under(point - origin, WindowSurfaceType::ALL)
+                    .is_some()
+                {
+                    return Some((layer.wl_surface().clone(), origin));
+                }
             }
         }
         None
