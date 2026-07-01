@@ -189,6 +189,50 @@ pub fn set_cpu_weight(path: &str, weight: u32) -> Result<(), IncarnateError> {
     set_cpu_weight_at(&cgroup_abs(path)?, weight)
 }
 
+/// Valor a escribir en un límite de memoria: `u64::MAX` = `"max"` (sin tope);
+/// cualquier otro, los bytes en decimal. cgroup v2 acepta ambas formas.
+fn mem_limit_value(bytes: u64) -> String {
+    if bytes == u64::MAX {
+        "max\n".into()
+    } else {
+        format!("{bytes}\n")
+    }
+}
+
+/// Fija `memory.max` (tope **duro**: al cruzarlo el kernel dispara el OOM del
+/// grupo) de un cgroup ya existente, dado su dir absoluto. `u64::MAX` = sin tope.
+pub fn set_memory_max_at(cgroup_abs: &Path, bytes: u64) -> Result<(), IncarnateError> {
+    write_cgroup_file(&cgroup_abs.join("memory.max"), &mem_limit_value(bytes))
+}
+
+/// Fija `memory.high` (tope **blando**: al cruzarlo el kernel estrangula y
+/// recupera memoria, sin matar) de un cgroup ya existente. `u64::MAX` = sin tope.
+pub fn set_memory_high_at(cgroup_abs: &Path, bytes: u64) -> Result<(), IncarnateError> {
+    write_cgroup_file(&cgroup_abs.join("memory.high"), &mem_limit_value(bytes))
+}
+
+/// Fija el peso de I/O por defecto (`io.weight default <w>`) de un cgroup ya
+/// existente, dado su dir absoluto. Jerárquico como `cpu.weight`; rango
+/// v2 1..=10000 (100 = neutro). Prioriza/deprioritiza el I/O de todo el subárbol.
+pub fn set_io_weight_at(cgroup_abs: &Path, weight: u32) -> Result<(), IncarnateError> {
+    write_cgroup_file(&cgroup_abs.join("io.weight"), &format!("default {weight}\n"))
+}
+
+/// `memory.max` por path declarado. Resuelve y delega en [`set_memory_max_at`].
+pub fn set_memory_max(path: &str, bytes: u64) -> Result<(), IncarnateError> {
+    set_memory_max_at(&cgroup_abs(path)?, bytes)
+}
+
+/// `memory.high` por path declarado. Resuelve y delega en [`set_memory_high_at`].
+pub fn set_memory_high(path: &str, bytes: u64) -> Result<(), IncarnateError> {
+    set_memory_high_at(&cgroup_abs(path)?, bytes)
+}
+
+/// `io.weight` por path declarado. Resuelve y delega en [`set_io_weight_at`].
+pub fn set_io_weight(path: &str, weight: u32) -> Result<(), IncarnateError> {
+    set_io_weight_at(&cgroup_abs(path)?, weight)
+}
+
 /// Freeze/unfreeze por path declarado. Resuelve y delega en [`set_frozen_at`].
 pub fn set_frozen(path: &str, frozen: bool) -> Result<(), IncarnateError> {
     set_frozen_at(&cgroup_abs(path)?, frozen)
@@ -238,6 +282,26 @@ mod tests {
         set_cpu_weight_at(&dir, 4321).unwrap();
         let got = std::fs::read_to_string(dir.join("cpu.weight")).unwrap();
         assert_eq!(got, "4321\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mem_limit_value_max_es_palabra_sin_tope() {
+        assert_eq!(mem_limit_value(u64::MAX), "max\n");
+        assert_eq!(mem_limit_value(0), "0\n");
+        assert_eq!(mem_limit_value(1_073_741_824), "1073741824\n");
+    }
+
+    #[test]
+    fn set_memory_e_io_escriben_los_archivos() {
+        let dir = std::env::temp_dir().join(format!("pacha-cg-mio-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        set_memory_max_at(&dir, 2_000_000).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("memory.max")).unwrap(), "2000000\n");
+        set_memory_high_at(&dir, u64::MAX).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("memory.high")).unwrap(), "max\n");
+        set_io_weight_at(&dir, 250).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("io.weight")).unwrap(), "default 250\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

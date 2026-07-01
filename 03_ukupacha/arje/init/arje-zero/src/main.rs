@@ -885,6 +885,15 @@ fn bus_request_to_audit(
             caller, cgroup: cgroup_path.clone(),
             change: format!("freeze={}", if *frozen { "on" } else { "off" }),
         }),
+        BusRequest::SetMemoryMax { cgroup_path, bytes } => from.map(|caller| AuditAction::Cgroup {
+            caller, cgroup: cgroup_path.clone(), change: format!("memory.max={bytes}"),
+        }),
+        BusRequest::SetMemoryHigh { cgroup_path, bytes } => from.map(|caller| AuditAction::Cgroup {
+            caller, cgroup: cgroup_path.clone(), change: format!("memory.high={bytes}"),
+        }),
+        BusRequest::SetIoWeight { cgroup_path, weight } => from.map(|caller| AuditAction::Cgroup {
+            caller, cgroup: cgroup_path.clone(), change: format!("io.weight={weight}"),
+        }),
         BusRequest::PowerOff { interactive } => Some(AuditAction::PowerMgmt {
             caller: *from, peer_pid: peer.pid, kind: "PowerOff".into(), interactive: *interactive,
         }),

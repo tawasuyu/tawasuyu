@@ -473,6 +473,21 @@ impl Engine for LocalEngine {
             .map_err(|e| EngineError::Cgroup(e.to_string()))
     }
 
+    async fn set_memory_max(&self, cgroup_path: String, bytes: u64) -> Result<(), EngineError> {
+        arje_incarnate::cgroup::set_memory_max(&cgroup_path, bytes)
+            .map_err(|e| EngineError::Cgroup(e.to_string()))
+    }
+
+    async fn set_memory_high(&self, cgroup_path: String, bytes: u64) -> Result<(), EngineError> {
+        arje_incarnate::cgroup::set_memory_high(&cgroup_path, bytes)
+            .map_err(|e| EngineError::Cgroup(e.to_string()))
+    }
+
+    async fn set_io_weight(&self, cgroup_path: String, weight: u32) -> Result<(), EngineError> {
+        arje_incarnate::cgroup::set_io_weight(&cgroup_path, weight)
+            .map_err(|e| EngineError::Cgroup(e.to_string()))
+    }
+
     async fn restart(&self, card_id: Ulid, grace: Duration) -> Result<(), EngineError> {
         // Capturamos el intent ANTES de parar (stop suelta el registro de la
         // entidad). Reiniciar es stop→run del mismo intent: misma Card, mismo

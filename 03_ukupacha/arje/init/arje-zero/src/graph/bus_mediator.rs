@@ -35,6 +35,9 @@ fn requires_auth(req: &BusRequest) -> bool {
             | BusRequest::RunCard { .. }
             | BusRequest::SetCpuWeight { .. }
             | BusRequest::Freeze { .. }
+            | BusRequest::SetMemoryMax { .. }
+            | BusRequest::SetMemoryHigh { .. }
+            | BusRequest::SetIoWeight { .. }
     )
 }
 
@@ -314,6 +317,48 @@ impl EnteGraph {
                     }
                     Err(e) => {
                         warn!(%caller, %cgroup_path, frozen, ?e, "Freeze falló");
+                        BusResponse::Error(e.to_string())
+                    }
+                };
+                let _ = reply.send(resp);
+            }
+            BusRequest::SetMemoryMax { cgroup_path, bytes } => {
+                let caller = from_authenticated.expect("auth-required guarantees Some");
+                let resp = match arje_incarnate::cgroup::set_memory_max(&cgroup_path, bytes) {
+                    Ok(()) => {
+                        info!(%caller, %cgroup_path, bytes, "SetMemoryMax");
+                        BusResponse::Ok
+                    }
+                    Err(e) => {
+                        warn!(%caller, %cgroup_path, bytes, ?e, "SetMemoryMax falló");
+                        BusResponse::Error(e.to_string())
+                    }
+                };
+                let _ = reply.send(resp);
+            }
+            BusRequest::SetMemoryHigh { cgroup_path, bytes } => {
+                let caller = from_authenticated.expect("auth-required guarantees Some");
+                let resp = match arje_incarnate::cgroup::set_memory_high(&cgroup_path, bytes) {
+                    Ok(()) => {
+                        info!(%caller, %cgroup_path, bytes, "SetMemoryHigh");
+                        BusResponse::Ok
+                    }
+                    Err(e) => {
+                        warn!(%caller, %cgroup_path, bytes, ?e, "SetMemoryHigh falló");
+                        BusResponse::Error(e.to_string())
+                    }
+                };
+                let _ = reply.send(resp);
+            }
+            BusRequest::SetIoWeight { cgroup_path, weight } => {
+                let caller = from_authenticated.expect("auth-required guarantees Some");
+                let resp = match arje_incarnate::cgroup::set_io_weight(&cgroup_path, weight) {
+                    Ok(()) => {
+                        info!(%caller, %cgroup_path, weight, "SetIoWeight");
+                        BusResponse::Ok
+                    }
+                    Err(e) => {
+                        warn!(%caller, %cgroup_path, weight, ?e, "SetIoWeight falló");
                         BusResponse::Error(e.to_string())
                     }
                 };

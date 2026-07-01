@@ -211,6 +211,22 @@ pub enum BusRequest {
     /// grupo conservando la RAM. Transporte de `sandokan_core::Engine::freeze`
     /// (SDD §8 capa 1). Requiere identidad autenticada; auditado.
     Freeze { cgroup_path: String, frozen: bool },
+
+    // (Agregar SIEMPRE al final — ver NOTA DE WIRE de arriba.)
+    /// Fija `memory.max` (tope duro, OOM al cruzar) de un cgroup existente.
+    /// `bytes == u64::MAX` = sin tope. Transporte de
+    /// `sandokan_core::Engine::set_memory_max` (SDD §8 capa 1). Auditado.
+    SetMemoryMax { cgroup_path: String, bytes: u64 },
+
+    /// Fija `memory.high` (tope blando, estrangula sin matar) de un cgroup
+    /// existente. `bytes == u64::MAX` = sin tope. Transporte de
+    /// `sandokan_core::Engine::set_memory_high` (SDD §8 capa 1). Auditado.
+    SetMemoryHigh { cgroup_path: String, bytes: u64 },
+
+    /// Fija `io.weight` (peso de I/O por defecto, 1..=10000) de un cgroup
+    /// existente — jerárquico como `cpu.weight`. Transporte de
+    /// `sandokan_core::Engine::set_io_weight` (SDD §8 capa 1). Auditado.
+    SetIoWeight { cgroup_path: String, weight: u32 },
 }
 
 /// Estado de vida de un Ente, tal como lo conoce arje-zero.

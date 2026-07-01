@@ -56,6 +56,31 @@ pub trait Engine: Send + Sync {
         Err(EngineError::Unsupported("freeze".into()))
     }
 
+    /// Fija `memory.max` (tope **duro**: el kernel OOM-matea el grupo al
+    /// cruzarlo) de un cgroup ya existente. `bytes == u64::MAX` = sin tope.
+    /// Jerárquico como el resto de los knobs de cgroup. Default `Unsupported`.
+    async fn set_memory_max(&self, cgroup_path: String, bytes: u64) -> Result<(), EngineError> {
+        let _ = (cgroup_path, bytes);
+        Err(EngineError::Unsupported("set_memory_max".into()))
+    }
+
+    /// Fija `memory.high` (tope **blando**: el kernel estrangula y recupera
+    /// memoria sin matar) de un cgroup ya existente. `bytes == u64::MAX` = sin
+    /// tope. Ideal para deprioritizar un slice sin arriesgar OOM. Default
+    /// `Unsupported`.
+    async fn set_memory_high(&self, cgroup_path: String, bytes: u64) -> Result<(), EngineError> {
+        let _ = (cgroup_path, bytes);
+        Err(EngineError::Unsupported("set_memory_high".into()))
+    }
+
+    /// Fija `io.weight` (peso de I/O por defecto, `1..=10000`, 100 = neutro) de
+    /// un cgroup ya existente — el análogo de `set_cpu_weight` para disco.
+    /// Jerárquico. Default `Unsupported`.
+    async fn set_io_weight(&self, cgroup_path: String, weight: u32) -> Result<(), EngineError> {
+        let _ = (cgroup_path, weight);
+        Err(EngineError::Unsupported("set_io_weight".into()))
+    }
+
     /// Reinicia una unidad: la detiene (con `grace`, igual que `stop`) y la
     /// vuelve a encarnar con la **misma Card** (mismo `card_id`). Para
     /// `LocalEngine` es stop→run del intent guardado; para un supervisor

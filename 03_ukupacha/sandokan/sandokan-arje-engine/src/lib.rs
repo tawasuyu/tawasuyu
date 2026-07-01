@@ -220,6 +220,36 @@ impl Engine for ArjeEngine {
             ))),
         }
     }
+
+    async fn set_memory_max(&self, cgroup_path: String, bytes: u64) -> Result<(), EngineError> {
+        match self.call(BusRequest::SetMemoryMax { cgroup_path, bytes }).await? {
+            BusResponse::Ok => Ok(()),
+            BusResponse::Error(e) => Err(EngineError::Cgroup(e)),
+            other => Err(EngineError::Transport(format!(
+                "respuesta inesperada a SetMemoryMax: {other:?}"
+            ))),
+        }
+    }
+
+    async fn set_memory_high(&self, cgroup_path: String, bytes: u64) -> Result<(), EngineError> {
+        match self.call(BusRequest::SetMemoryHigh { cgroup_path, bytes }).await? {
+            BusResponse::Ok => Ok(()),
+            BusResponse::Error(e) => Err(EngineError::Cgroup(e)),
+            other => Err(EngineError::Transport(format!(
+                "respuesta inesperada a SetMemoryHigh: {other:?}"
+            ))),
+        }
+    }
+
+    async fn set_io_weight(&self, cgroup_path: String, weight: u32) -> Result<(), EngineError> {
+        match self.call(BusRequest::SetIoWeight { cgroup_path, weight }).await? {
+            BusResponse::Ok => Ok(()),
+            BusResponse::Error(e) => Err(EngineError::Cgroup(e)),
+            other => Err(EngineError::Transport(format!(
+                "respuesta inesperada a SetIoWeight: {other:?}"
+            ))),
+        }
+    }
 }
 
 #[cfg(test)]

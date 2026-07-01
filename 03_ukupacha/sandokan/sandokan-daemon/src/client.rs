@@ -135,6 +135,30 @@ impl Engine for DaemonEngine {
             _ => Err(mismatch()),
         }
     }
+
+    async fn set_memory_max(&self, cgroup_path: String, bytes: u64) -> Result<(), EngineError> {
+        match self.roundtrip(DaemonRequest::SetMemoryMax { cgroup_path, bytes }).await? {
+            DaemonResponse::Done => Ok(()),
+            DaemonResponse::Err(e) => Err(e),
+            _ => Err(mismatch()),
+        }
+    }
+
+    async fn set_memory_high(&self, cgroup_path: String, bytes: u64) -> Result<(), EngineError> {
+        match self.roundtrip(DaemonRequest::SetMemoryHigh { cgroup_path, bytes }).await? {
+            DaemonResponse::Done => Ok(()),
+            DaemonResponse::Err(e) => Err(e),
+            _ => Err(mismatch()),
+        }
+    }
+
+    async fn set_io_weight(&self, cgroup_path: String, weight: u32) -> Result<(), EngineError> {
+        match self.roundtrip(DaemonRequest::SetIoWeight { cgroup_path, weight }).await? {
+            DaemonResponse::Done => Ok(()),
+            DaemonResponse::Err(e) => Err(e),
+            _ => Err(mismatch()),
+        }
+    }
 }
 
 #[async_trait]

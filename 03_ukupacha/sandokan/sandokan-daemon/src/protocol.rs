@@ -29,6 +29,10 @@ pub enum DaemonRequest {
     /// Reinicia una unidad (stop→run del intent retenido). Append al final del
     /// enum: postcard numera por posición y un cliente viejo no debe correrse.
     Restart { card_id: Ulid, grace_ms: u64 },
+    /// Knobs de recursos de un cgroup existente (append al final por wire).
+    SetMemoryMax { cgroup_path: String, bytes: u64 },
+    SetMemoryHigh { cgroup_path: String, bytes: u64 },
+    SetIoWeight { cgroup_path: String, weight: u32 },
 }
 
 /// Response del daemon al cliente. Una variante por resultado posible.

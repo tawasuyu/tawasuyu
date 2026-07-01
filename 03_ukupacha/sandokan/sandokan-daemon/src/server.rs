@@ -110,6 +110,24 @@ async fn dispatch<E: InteractiveEngine>(engine: &E, req: DaemonRequest) -> Daemo
                 Err(e) => DaemonResponse::Err(e),
             }
         }
+        DaemonRequest::SetMemoryMax { cgroup_path, bytes } => {
+            match engine.set_memory_max(cgroup_path, bytes).await {
+                Ok(()) => DaemonResponse::Done,
+                Err(e) => DaemonResponse::Err(e),
+            }
+        }
+        DaemonRequest::SetMemoryHigh { cgroup_path, bytes } => {
+            match engine.set_memory_high(cgroup_path, bytes).await {
+                Ok(()) => DaemonResponse::Done,
+                Err(e) => DaemonResponse::Err(e),
+            }
+        }
+        DaemonRequest::SetIoWeight { cgroup_path, weight } => {
+            match engine.set_io_weight(cgroup_path, weight).await {
+                Ok(()) => DaemonResponse::Done,
+                Err(e) => DaemonResponse::Err(e),
+            }
+        }
     }
 }
 
