@@ -54,6 +54,8 @@ use crate::Msg;
 const HEADER_H: f32 = 40.0;
 /// Padding interno del panel, en px.
 const PAD: f32 = 8.0;
+/// Alto de la barrita de control de la surface (una línea), en px.
+const BARRITA_H: f32 = 28.0;
 /// Alto estimado de una fila del navegador en modo árbol (igual al `ROW_H`
 /// interno del widget). Para dimensionar el scroll.
 const TREE_ROW_H: f32 = 24.0;
@@ -242,6 +244,62 @@ fn rail_separator(thickness: f32, theme: &Theme) -> View<Msg> {
 /// `shuma_input`). La usan ambos backends (en winit dentro del rect absoluto —sin
 /// dientes hospedados, que dependen del foco, pero sí con el de shuma—, en
 /// layer-shell como columna de ancho `thickness` dentro de la surface).
+/// La barrita de control de una surface sidebar: una fila de una línea con dos
+/// switches segmentados que fijan, POR-SIDEBAR, la POSICIÓN del rail (Adentro =
+/// overlay estilo cosmos / Afuera = franja saliente) y el DOCKED (Flota = overlay
+/// sin reservar / Fijo = reserva franja que las ventanas respetan). Cada cambio
+/// persiste en el TOML del usuario (`Surface::rail_outside`/`reserve`) y re-ancla la
+/// surface. `docked`/`rail_outside` son el estado EFECTIVO actual (override
+/// por-sidebar si lo hay, si no el global) para ubicar los switches.
+fn sidebar_control_bar(si: usize, docked: bool, rail_outside: bool, theme: &Theme) -> View<Msg> {
+    let pal = SegmentedPalette::from_theme(theme);
+    let seg_h = BARRITA_H - 8.0;
+    let pos = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: percent(0.0_f32), height: length(seg_h) },
+        ..Default::default()
+    })
+    .children(vec![segmented_view(
+        &["Adentro", "Afuera"],
+        rail_outside as usize,
+        move |i| Msg::SidebarSetRailOutside(si, i == 1),
+        &pal,
+    )]);
+    let dock = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: percent(0.0_f32), height: length(seg_h) },
+        ..Default::default()
+    })
+    .children(vec![segmented_view(
+        &["Flota", "Fijo"],
+        docked as usize,
+        move |i| Msg::SidebarSetDocked(si, i == 1),
+        &pal,
+    )]);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(BARRITA_H),
+        },
+        align_items: Some(AlignItems::Center),
+        padding: TaffyRect {
+            left: length(PAD),
+            right: length(PAD),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        gap: Size {
+            width: length(6.0_f32),
+            height: length(0.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(vec![pos, dock])
+}
+
 fn rail_strip(
     surface: &Surface,
     si: usize,
@@ -545,6 +603,8 @@ pub fn sidebar_surface_view(
     rag: &RagState,
     vivo: &DienteVivo,
     centro: &CentroDatos,
+    docked: bool,
+    rail_outside: bool,
     theme: &Theme,
 ) -> View<Msg> {
     let thickness = surface.thickness;
@@ -568,7 +628,12 @@ pub fn sidebar_surface_view(
 
     let children = if let Some(ti) = open_ti {
         let pw = (w - thickness).max(0.0);
+        // Barrita de control de la surface (una línea, al tope del panel) + el
+        // contenido del diente debajo, ocupando el alto restante.
+        let barrita = sidebar_control_bar(si, docked, rail_outside, theme);
+        let cuerpo_h = (h - BARRITA_H).max(0.0);
         let panel = View::new(Style {
+            flex_direction: FlexDirection::Column,
             size: Size {
                 width: length(pw),
                 height: percent(1.0_f32),
@@ -576,7 +641,10 @@ pub fn sidebar_surface_view(
             flex_shrink: 0.0,
             ..Default::default()
         })
-        .children(vec![panel_inner(surface, ti, h, nav, shuma, rag, centro, theme)]);
+        .children(vec![
+            barrita,
+            panel_inner(surface, ti, cuerpo_h, nav, shuma, rag, centro, theme),
+        ]);
         // El rail va pegado a su borde: a la izquierda del panel si el sidebar
         // está anclado a la izquierda; a la derecha si está a la derecha.
         match surface.anchor {

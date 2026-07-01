@@ -1344,6 +1344,12 @@ impl LayerApp {
                 flota_remoto: self.flota_remoto.as_deref(),
                 unidades: self.unidades_now.as_ref(),
             };
+            // Estado EFECTIVO de los dos ejes de esta surface, para que la barrita
+            // muestre los switches en su posición actual: el override por-sidebar
+            // (`reserve`/`rail_outside`) gana; si es `None`, el global.
+            let s = &self.cfg.surfaces[idx];
+            let docked_ef = s.reserve.unwrap_or(self.sidebar_docked);
+            let rail_outside_ef = s.rail_outside.unwrap_or(self.dientes_outside);
             render::sidebar_surface_view(
                 &self.cfg.surfaces[idx],
                 idx,
@@ -1357,6 +1363,8 @@ impl LayerApp {
                 &self.rag,
                 &vivo,
                 &centro,
+                docked_ef,
+                rail_outside_ef,
                 &self.theme,
             )
         } else if self.cfg.surfaces[idx].kind == SurfaceKind::Dock {
@@ -1786,6 +1794,16 @@ impl LayerApp {
                 }
             }
             Msg::NavTabActivate(si, ti) => self.set_sidebar_open(si, ti),
+            // Barrita del sidebar: persiste el eje por-sidebar y re-ejecuta pata
+            // para reanclar la layer surface con el nuevo docked/posición.
+            Msg::SidebarSetDocked(si, docked) => {
+                crate::persistir_eje_sidebar(si, Some(docked), None);
+                self.re_exec_pata("cambió «docked» del sidebar (barrita)");
+            }
+            Msg::SidebarSetRailOutside(si, outside) => {
+                crate::persistir_eje_sidebar(si, None, Some(outside));
+                self.re_exec_pata("cambió la posición del rail del sidebar (barrita)");
+            }
             Msg::NavClosePanel => self.cerrar_sidebar(),
             Msg::NavSetMode(m) => {
                 self.nav.mode = m;

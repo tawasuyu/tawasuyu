@@ -91,6 +91,26 @@ fn lift_shuma(m: shuma_app::Msg) -> Msg {
     Msg::ShumaFull(shuma_app::FullMsg(m))
 }
 
+/// Persiste el override por-sidebar de los ejes de la barrita en el TOML del
+/// usuario: `docked` → `Surface::reserve`, `rail_outside` → `Surface::rail_outside`
+/// (cada uno `Some(v)` fija, `None` no toca). Carga la config viva, muta la surface
+/// `si` y la reescribe. El re-anclaje lo hace el llamador (re-exec en layer,
+/// `recargar_config` en winit). No-op si `si` está fuera de rango.
+pub(crate) fn persistir_eje_sidebar(si: usize, docked: Option<bool>, rail_outside: Option<bool>) {
+    let mut cfg = pata_config::load();
+    if let Some(s) = cfg.surfaces.get_mut(si) {
+        if let Some(d) = docked {
+            s.reserve = Some(d);
+        }
+        if let Some(o) = rail_outside {
+            s.rail_outside = Some(o);
+        }
+        if let Err(e) = pata_config::save(&cfg) {
+            eprintln!("pata · no pude guardar la config del sidebar: {e}");
+        }
+    }
+}
+
 /// Los mensajes de la app.
 #[derive(Clone, Debug)]
 pub enum Msg {
@@ -316,6 +336,12 @@ pub enum Msg {
     /// Clic en un diente del rail `(surface_idx, tab_idx)`: despliega/repliega su
     /// panel navegador.
     NavTabActivate(usize, usize),
+    /// Barrita del sidebar: fija el eje DOCKED de la surface `si` (reserva franja
+    /// del escritorio sí/no). Persiste en el TOML y re-ancla la layer surface.
+    SidebarSetDocked(usize, bool),
+    /// Barrita del sidebar: fija la POSICIÓN del rail de la surface `si` (afuera =
+    /// franja saliente / adentro = overlay). Persiste en el TOML y re-ancla.
+    SidebarSetRailOutside(usize, bool),
     /// Cerrar el panel navegador desplegado (Esc / clic fuera).
     NavClosePanel,
     /// Cambiar el modo del navegador (árbol/grafo).
@@ -2177,6 +2203,16 @@ impl App for PataApp {
             Msg::TaskDragEnd(_) => {}
             // --- Sidebar navegador (Fase 11c) ---
             Msg::NavTabActivate(si, ti) => model.nav.toggle_tab(si, ti),
+            // Barrita del sidebar (backend winit, dev): persiste el eje y re-resuelve
+            // el marco. No hay layer surfaces que reanclar (ventana única anidada).
+            Msg::SidebarSetDocked(si, docked) => {
+                persistir_eje_sidebar(si, Some(docked), None);
+                model.recargar_config();
+            }
+            Msg::SidebarSetRailOutside(si, outside) => {
+                persistir_eje_sidebar(si, None, Some(outside));
+                model.recargar_config();
+            }
             Msg::NavClosePanel => model.nav.open = None,
             Msg::NavSetMode(m) => model.nav.mode = m,
             Msg::NavSelect(id) => model.nav.selected = Some(id),
