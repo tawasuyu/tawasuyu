@@ -807,6 +807,9 @@ pub(crate) enum Msg {
     VectorTrazoJoin,
     /// Vector: alterna trazo punteado (dash) on/off.
     VectorTrazoDash,
+    /// Vector: booleano de path — combina la capa vectorial seleccionada con la
+    /// vectorial de abajo (Unir = unión, Excluir = diferencia simétrica).
+    VectorBooleano(tullpu_core::BooleanoPath),
     /// Precisión: alterna el snap a grilla (off → 16 px → off).
     ToggleSnap,
     /// Precisión: centra la capa vectorial en el lienzo (`h`, `v` = ejes).

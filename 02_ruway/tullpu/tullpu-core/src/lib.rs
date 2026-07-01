@@ -336,6 +336,23 @@ pub enum ComandoPath {
     Cerrar,
 }
 
+/// Operación booleana entre dos paths, resuelta de forma **no destructiva** por
+/// *compound path* (concatenar sub-paths + regla de relleno) — exacta y sin
+/// clipping de curvas. Sólo se ofrecen las dos que son exactas en el caso
+/// general: `Unir` (relleno no-cero: el área es la unión si ambos paths giran
+/// igual) y `Excluir` (par-impar: diferencia simétrica, agujero en la
+/// intersección). La **resta** (`a − b`) y la **intersección** verdaderas NO son
+/// expresables por regla de relleno para paths que se solapan parcialmente
+/// (la resta por winding invertido sólo vale si `b ⊆ a`) — necesitan un clipper
+/// de curvas y quedan fuera por ahora.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BooleanoPath {
+    /// Unión: área cubierta por cualquiera de los dos (relleno no-cero).
+    Unir,
+    /// Diferencia simétrica: área de exactamente uno (relleno par-impar).
+    Excluir,
+}
+
 /// Regla de relleno para sub-paths que se cruzan o se anidan.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ReglaRelleno {
@@ -722,6 +739,28 @@ impl ParamsVector {
         mejor
     }
 
+    /// Invierte la orientación de cada sub-path (lo recorre al revés,
+    /// intercambiando los controles de cada cúbica) preservando la forma.
+    /// Invertir dos veces es la identidad. Cambia el sentido del winding y el
+    /// punto de arranque del trazo/dash.
+    pub fn invertir_orientacion(&mut self) {
+        self.comandos = invertir_comandos(&self.comandos);
+    }
+
+    /// Combina este path con `otro` por *compound path* según `modo`
+    /// ([`BooleanoPath`]): concatena los sub-paths y fija la regla de relleno.
+    /// No destructivo y exacto (sin clipping). Conserva el relleno/trazo de
+    /// `self`. El resultado sigue siendo editable como un solo path vectorial.
+    pub fn combinar_con(&self, otro: &ParamsVector, modo: BooleanoPath) -> ParamsVector {
+        let mut out = self.clone();
+        out.regla = match modo {
+            BooleanoPath::Unir => ReglaRelleno::NoCero,
+            BooleanoPath::Excluir => ReglaRelleno::ParImpar,
+        };
+        out.comandos.extend_from_slice(&otro.comandos);
+        out
+    }
+
     /// Traslada **todo** el path por `(dx, dy)` (mover la capa vectorial entera).
     pub fn trasladar(&mut self, dx: f32, dy: f32) {
         self.transformar([1.0, 0.0, 0.0, 1.0, dx, dy]);
@@ -848,6 +887,68 @@ impl ParamsVector {
             estilo_trazo: None,
         }
     }
+}
+
+/// Invierte la orientación de una lista de comandos de path, sub-path por
+/// sub-path (cada uno delimitado por un `MoverA`, con un `Cerrar` opcional al
+/// final). Cada sub-path se recorre al revés: el último ancla pasa a ser el
+/// `MoverA`, cada segmento se invierte y los controles de las cúbicas se
+/// intercambian (`c1 ↔ c2`). Pura; aplicarla dos veces reproduce la entrada.
+fn invertir_comandos(comandos: &[ComandoPath]) -> Vec<ComandoPath> {
+    let mut out = Vec::with_capacity(comandos.len());
+    let mut i = 0;
+    while i < comandos.len() {
+        // Delimitar el sub-path [i, j): arranca en MoverA, corta antes del
+        // próximo MoverA. `cerrado` = hay un Cerrar al final del sub-path.
+        let ComandoPath::MoverA { x: sx, y: sy } = comandos[i] else {
+            // Comando suelto sin MoverA previo (path degenerado): copialo tal cual.
+            out.push(comandos[i]);
+            i += 1;
+            continue;
+        };
+        let mut j = i + 1;
+        while j < comandos.len() && !matches!(comandos[j], ComandoPath::MoverA { .. }) {
+            j += 1;
+        }
+        let cerrado = matches!(comandos.get(j - 1), Some(ComandoPath::Cerrar));
+        let fin_seg = if cerrado { j - 1 } else { j }; // rango de segmentos (sin Cerrar)
+
+        // Anclas del sub-path en orden: el MoverA + el endpoint de cada segmento.
+        let mut anclas = vec![(sx, sy)];
+        for c in &comandos[i + 1..fin_seg] {
+            match *c {
+                ComandoPath::LineaA { x, y } | ComandoPath::CurvaA { x, y, .. } => {
+                    anclas.push((x, y))
+                }
+                _ => {}
+            }
+        }
+        // Sub-path reversado: MoverA en el último ancla, luego segmentos al revés.
+        let n = anclas.len();
+        out.push(ComandoPath::MoverA { x: anclas[n - 1].0, y: anclas[n - 1].1 });
+        for k in (0..n - 1).rev() {
+            // Segmento original que llega al ancla k+1 es comandos[i+1 + k].
+            let seg = comandos[i + 1 + k];
+            let destino = anclas[k];
+            match seg {
+                ComandoPath::LineaA { .. } => {
+                    out.push(ComandoPath::LineaA { x: destino.0, y: destino.1 });
+                }
+                ComandoPath::CurvaA { c1x, c1y, c2x, c2y, .. } => {
+                    // Invertida: los controles se intercambian.
+                    out.push(ComandoPath::CurvaA {
+                        c1x: c2x, c1y: c2y, c2x: c1x, c2y: c1y, x: destino.0, y: destino.1,
+                    });
+                }
+                _ => {}
+            }
+        }
+        if cerrado {
+            out.push(ComandoPath::Cerrar);
+        }
+        i = j;
+    }
+    out
 }
 
 /// Distancia de `p` al segmento recto `a→b` y el parámetro `t ∈ [0,1]` del
@@ -1625,6 +1726,45 @@ mod tests {
         p2.insertar_vertice_en_segmento(idx, t);
         let cerca = p2.puntos_ancla().iter().any(|(_, xy)| (xy[0] - 5.0).abs() < 0.6 && xy[1].abs() < 0.6);
         assert!(cerca, "hay un ancla nuevo cerca de (5,0)");
+    }
+
+    #[test]
+    fn invertir_orientacion_dos_veces_es_identidad() {
+        // Path mixto: recta + curva, cerrado.
+        let mut p = ParamsVector {
+            comandos: vec![
+                ComandoPath::MoverA { x: 0.0, y: 0.0 },
+                ComandoPath::LineaA { x: 10.0, y: 0.0 },
+                ComandoPath::CurvaA { c1x: 12.0, c1y: 4.0, c2x: 12.0, c2y: 8.0, x: 10.0, y: 10.0 },
+                ComandoPath::Cerrar,
+            ],
+            relleno: Some([0, 0, 0, 255]), gradiente: None, regla: ReglaRelleno::NoCero,
+            trazo: None, ancho_trazo: 0.0, estilo_trazo: None,
+        };
+        let orig = p.comandos.clone();
+        p.invertir_orientacion();
+        // El primer ancla del reversado es el último del original (10,10).
+        assert_eq!(p.puntos_ancla()[0].1, [10.0, 10.0]);
+        assert!(matches!(p.comandos.last(), Some(ComandoPath::Cerrar)), "sigue cerrado");
+        p.invertir_orientacion();
+        assert_eq!(p.comandos, orig, "invertir dos veces = identidad");
+    }
+
+    #[test]
+    fn combinar_paths_fija_regla_segun_modo() {
+        let a = ParamsVector::rectangulo(0.0, 0.0, 10.0, 10.0, [0, 0, 0, 255]);
+        let b = ParamsVector::rectangulo(5.0, 5.0, 10.0, 10.0, [0, 0, 0, 255]);
+        let na = a.comandos.len();
+        let nb = b.comandos.len();
+        // Unir: concatena, regla no-cero, conserva el relleno de `a`.
+        let u = a.combinar_con(&b, BooleanoPath::Unir);
+        assert_eq!(u.comandos.len(), na + nb);
+        assert_eq!(u.regla, ReglaRelleno::NoCero);
+        assert_eq!(u.relleno, a.relleno);
+        // Excluir: par-impar (agujero en la intersección).
+        let x = a.combinar_con(&b, BooleanoPath::Excluir);
+        assert_eq!(x.regla, ReglaRelleno::ParImpar);
+        assert_eq!(x.comandos.len(), na + nb);
     }
 
     #[test]

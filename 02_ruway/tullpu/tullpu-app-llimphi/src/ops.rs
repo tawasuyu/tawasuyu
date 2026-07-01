@@ -1638,6 +1638,49 @@ pub(crate) fn editar_estilo_trazo(
     });
 }
 
+/// Booleano de paths: combina la capa vectorial seleccionada (`a`, arriba) con
+/// la vectorial más cercana **por debajo** (`b`) por *compound path*
+/// ([`ParamsVector::combinar_con`]). El resultado reemplaza a la seleccionada
+/// (conserva su relleno/trazo) y elimina la de abajo. No-op (con estado) si la
+/// seleccionada no es vectorial o no hay otra vectorial debajo.
+pub(crate) fn combinar_vectores_seleccion(
+    model: &mut Model,
+    modo: tullpu_core::BooleanoPath,
+) -> bool {
+    let Some(sel) = model.seleccionada else {
+        model.estado = "no hay capa seleccionada".into();
+        return false;
+    };
+    let Some(sel_idx) = model.lienzo.capas.iter().position(|c| c.id == sel) else {
+        return false;
+    };
+    let Some(a) = model.lienzo.capas[sel_idx].params_vector().cloned() else {
+        model.estado = "la capa seleccionada no es vectorial".into();
+        return false;
+    };
+    // Vectorial más cercana por debajo (índice menor = más abajo en la pila).
+    let Some(bi) = model.lienzo.capas[..sel_idx]
+        .iter()
+        .rposition(|c| c.params_vector().is_some())
+    else {
+        model.estado = "no hay otra capa vectorial debajo para combinar".into();
+        return false;
+    };
+    let b = model.lienzo.capas[bi].params_vector().cloned().unwrap();
+    let combinado = a.combinar_con(&b, modo);
+    if let tullpu_core::ClaseCapa::Vector(p) = &mut model.lienzo.capas[sel_idx].clase {
+        *p = combinado;
+    }
+    model.lienzo.capas.remove(bi);
+    rerasterizar_vector(model, sel);
+    let verbo = match modo {
+        tullpu_core::BooleanoPath::Unir => "unidas",
+        tullpu_core::BooleanoPath::Excluir => "excluidas",
+    };
+    model.estado = format!("2 capas vectoriales {verbo}");
+    true
+}
+
 /// Redondea `v` al múltiplo de la grilla de snap (si está activa).
 fn snap_v(v: f32, model: &Model) -> f32 {
     match model.snap_grid {

@@ -745,6 +745,36 @@
     }
 
     #[test]
+    fn booleano_vectorial_combina_con_la_capa_de_abajo() {
+        let mut model = modelo_minimo();
+        model.lienzo = tullpu_core::Lienzo::nuevo(20, 20);
+        // Capa de abajo (b) y de arriba (a), ambas vectoriales.
+        let mk = |m: &mut Model, x: f32| {
+            let params = tullpu_core::ParamsVector::rectangulo(x, 2.0, 8.0, 8.0, [200, 0, 0, 255]);
+            let hash = m.almacen.insertar(vec![0u8; 20 * 20 * 4]);
+            let cap = tullpu_core::Capa::vector("v", hash, params);
+            let id = cap.id;
+            m.lienzo.apilar(cap);
+            id
+        };
+        let _b = mk(&mut model, 2.0);
+        let a = mk(&mut model, 6.0); // solapa a b
+        model.seleccionada = Some(a);
+        let n_capas = model.lienzo.capas.len();
+        let n_cmds_a = model.lienzo.capa(a).unwrap().params_vector().unwrap().comandos.len();
+        model = <Tullpu as App>::update(
+            model,
+            Msg::VectorBooleano(tullpu_core::BooleanoPath::Unir),
+            &Handle::for_test(),
+        );
+        // Se eliminó la de abajo; la seleccionada quedó como compound path.
+        assert_eq!(model.lienzo.capas.len(), n_capas - 1, "la capa de abajo se consumió");
+        let p = model.lienzo.capa(a).unwrap().params_vector().unwrap();
+        assert_eq!(p.regla, tullpu_core::ReglaRelleno::NoCero, "unión = no-cero");
+        assert!(p.comandos.len() > n_cmds_a, "concatenó los sub-paths");
+    }
+
+    #[test]
     fn pluma_click_en_segmento_inserta_ancla() {
         let (mut model, id) = modelo_vector_rect();
         let ancla = |m: &Model| {

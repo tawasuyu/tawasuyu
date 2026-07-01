@@ -907,6 +907,25 @@ mod tests {
     }
 
     #[test]
+    fn booleano_union_rellena_la_interseccion_y_excluir_la_hueca() {
+        use tullpu_core::{BooleanoPath, ParamsVector};
+        // Dos cuadrados 8×8 que solapan en [4,8)×[4,8) sobre un lienzo 12×12.
+        let a = ParamsVector::rectangulo(0.0, 0.0, 8.0, 8.0, [255, 0, 0, 255]);
+        let b = ParamsVector::rectangulo(4.0, 4.0, 8.0, 8.0, [255, 0, 0, 255]);
+        let alfa_en = |buf: &[u8], x: usize, y: usize| buf[(y * 12 + x) * 4 + 3];
+        // Unión (no-cero): el solape (5,5) queda RELLENO.
+        let u = rasterizar_vector(&a.combinar_con(&b, BooleanoPath::Unir), 12, 12);
+        assert!(alfa_en(&u, 5, 5) > 200, "unión rellena la intersección");
+        assert!(alfa_en(&u, 1, 1) > 200, "y el resto de A");
+        assert!(alfa_en(&u, 10, 10) > 200, "y el resto de B");
+        // Exclusión (par-impar): el solape (5,5) queda HUECO.
+        let x = rasterizar_vector(&a.combinar_con(&b, BooleanoPath::Excluir), 12, 12);
+        assert!(alfa_en(&x, 5, 5) < 40, "exclusión perfora la intersección");
+        assert!(alfa_en(&x, 1, 1) > 200, "pero conserva A fuera del solape");
+        assert!(alfa_en(&x, 10, 10) > 200, "y B fuera del solape");
+    }
+
+    #[test]
     fn invertir_complementa_rgb_y_respeta_alfa() {
         let src = buffer_solido(1, 1, [10, 200, 50, 128]);
         let out = aplicar_op_local(&OpLocal::Invertir, &src, 1, 1).unwrap();

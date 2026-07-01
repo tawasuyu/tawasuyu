@@ -1160,6 +1160,11 @@ impl App for Tullpu {
                 });
                 pushear_snapshot(&mut model, None);
             }
+            Msg::VectorBooleano(modo) => {
+                if combinar_vectores_seleccion(&mut model, modo) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
             Msg::ToggleSnap => {
                 model.snap_grid = if model.snap_grid.is_some() { None } else { Some(16.0) };
                 model.estado = match model.snap_grid {

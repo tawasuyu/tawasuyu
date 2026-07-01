@@ -1231,6 +1231,11 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         hijos.push(envolver_fila(button_view("◧ gradiente lineal".to_string(), &pal, Msg::VectorGradienteLineal)));
         hijos.push(envolver_fila(button_view("◉ gradiente radial".to_string(), &pal, Msg::VectorGradienteRadial)));
         hijos.push(envolver_fila(button_view("⨯ quitar gradiente".to_string(), &pal, Msg::VectorGradienteQuitar)));
+        // Booleanos de path: combina con la capa vectorial de abajo (compound
+        // path exacto; unión con no-cero, exclusión con par-impar).
+        hijos.push(subtitulo("booleano (con la vectorial de abajo)"));
+        hijos.push(envolver_fila(button_view("∪ unir".to_string(), &pal, Msg::VectorBooleano(tullpu_core::BooleanoPath::Unir))));
+        hijos.push(envolver_fila(button_view("⊕ excluir".to_string(), &pal, Msg::VectorBooleano(tullpu_core::BooleanoPath::Excluir))));
         // Precisión: snap a grilla + alinear al lienzo.
         let snap_lbl = match model.snap_grid {
             Some(g) => format!("snap: {g:.0} px (on)"),
