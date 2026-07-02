@@ -7,7 +7,7 @@ use ulid::Ulid;
 
 /// Un evento en la vida de una entidad encarnada. El orquestador los
 /// emite; los consumidores (shells, paneles) reaccionan.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LifecycleEvent {
     /// La entidad fue encarnada. `pid` es `None` si no aplica (Wasm, virtual).
     Spawned { card_id: Ulid, pid: Option<i32> },

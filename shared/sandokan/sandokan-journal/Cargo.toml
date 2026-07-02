@@ -1,0 +1,16 @@
+[package]
+name = "sandokan-journal"
+description = "Journal durable del plano de control de sandokan: log append-only de eventos de ciclo de vida con seq monótono, snapshot, compactación y replay-para-reconstruir. Reusa el patrón de nakui-core::event_log; hermano de arje-brain-audit para el orquestador."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+sandokan-core = { path = "../sandokan-core" }
+sandokan-lifecycle = { path = "../sandokan-lifecycle" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ulid = { workspace = true }
+thiserror = { workspace = true }
