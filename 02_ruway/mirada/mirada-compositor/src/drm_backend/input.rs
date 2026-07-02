@@ -449,8 +449,22 @@ impl DrmState {
 
                 // Click DERECHO sobre la BARRA DE TÍTULO de una ventana: abre el
                 // menú **contextual de ventana** (minimizar/maximizar/flotar/
+                // ¿Hay una layer surface INTERACTIVA (con input-region) bajo el
+                // puntero? —el panel/drawer de pata abierto, una barra—. Si la hay,
+                // es la dueña del píxel: ningún gesto de chrome de VENTANA (menú o
+                // mover por titlebar, botón de titlebar, divisor de tesela,
+                // Super+arrastre) debe dispararse; el click cae al forwarding normal,
+                // que ya rutea por input-region a la layer. Sin esto, la barrita del
+                // panel «atravesaba» al titlebar de una ventana que caía a esa altura.
+                // (Con el drawer cerrado la región es vacía → `layer_under` da None →
+                // el chrome de ventana funciona igual que siempre.)
+                let sobre_layer = pressed && {
+                    let (px, py) = self.app.pointer_loc;
+                    self.app.layer_under(px, py).is_some()
+                };
+
                 // enviar-a/cerrar). Va ANTES del menú del fondo. No en greeter.
-                if pressed && button == BTN_RIGHT && !self.app.shell_activo() {
+                if pressed && button == BTN_RIGHT && !self.app.shell_activo() && !sobre_layer {
                     let (x, y) = self.app.pointer_loc;
                     if let Some(i) = self.titlebar_at(x, y) {
                         let id = self.app.windows[i].id;
@@ -465,6 +479,7 @@ impl DrmState {
                     && button == BTN_RIGHT
                     && !self.menu_entries.is_empty()
                     && !self.app.shell_activo()
+                    && !sobre_layer
                 {
                     let super_held = self
                         .app
@@ -500,7 +515,7 @@ impl DrmState {
                 // ¿Empieza un arrastre? `Super`+botón sobre una ventana:
                 // izquierdo mueve, derecho redimensiona. En modo greeter no
                 // hay arrastre: el login está clavado a pantalla completa.
-                if pressed && self.app.drag.is_none() && !self.app.shell_activo() {
+                if pressed && self.app.drag.is_none() && !self.app.shell_activo() && !sobre_layer {
                     let super_held = self
                         .app
                         .keyboard
@@ -513,17 +528,7 @@ impl DrmState {
                     // izquierdo sobre una teselada sólo hacía swap sin moverse en
                     // vivo, y daba la sensación de que «win+drag no mueve».)
                     let (x, y) = self.app.pointer_loc;
-                    // Si hay una layer surface INTERACTIVA (con input-region) bajo el
-                    // puntero —el panel/drawer de pata abierto, una barra— el
-                    // Super+arrastre pertenece a esa layer y NO debe agarrar la ventana
-                    // de atrás (antes movía la ventana «a través» del panel). Con el
-                    // drawer cerrado la región es vacía → `layer_under` da None → el
-                    // gesto sí mueve la ventana, como corresponde.
-                    let hit = if super_held && self.app.layer_under(x, y).is_some() {
-                        None
-                    } else {
-                        self.window_at(x, y)
-                    };
+                    let hit = self.window_at(x, y);
                     let mode = match (button, hit) {
                         (BTN_LEFT, Some(_)) if super_held => Some(DragMode::Move),
                         (BTN_RIGHT, Some(_)) if super_held => Some(DragMode::Resize),
@@ -551,6 +556,7 @@ impl DrmState {
                     && button == BTN_LEFT
                     && self.app.drag.is_none()
                     && !self.app.shell_activo()
+                    && !sobre_layer
                 {
                     let super_held = self
                         .app
@@ -572,7 +578,7 @@ impl DrmState {
                 // Click izquierdo sobre un BOTÓN del titlebar: ejecuta su acción y
                 // no arranca arrastre. Va ANTES del drag. La acción la define el
                 // layout (configurable); `Menu` abre el menú contextual.
-                if pressed && button == BTN_LEFT && !self.app.shell_activo() {
+                if pressed && button == BTN_LEFT && !self.app.shell_activo() && !sobre_layer {
                     let (x, y) = self.app.pointer_loc;
                     if let Some(target) = self.titlebar_button_at(x, y) {
                         match target {
@@ -603,6 +609,7 @@ impl DrmState {
                     && button == BTN_LEFT
                     && self.app.drag.is_none()
                     && !self.app.shell_activo()
+                    && !sobre_layer
                 {
                     let (x, y) = self.app.pointer_loc;
                     if let Some(i) = self.titlebar_at(x, y) {
